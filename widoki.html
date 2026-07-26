@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="pl" data-theme="granat">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="dark light">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Next Door Callendar — widoki</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  [data-theme="granat"]{
+    --bg:#0C1521; --surface:#121E2E; --raised:#1A2A3E;
+    --text:#DDE6EF; --muted:#6E8299; --dim:rgba(221,230,239,.44);
+    --line:rgba(110,130,153,.22); --accent:#8FB8D9; --accent-line:rgba(143,184,217,.44);
+    --on-accent:#0E1826; --w1:#6E8299; --w2:#7C9BBB; --w3:#8FB8D9;
+  }
+  [data-theme="lazur"]{
+    --bg:#ECF1F5; --surface:#FAFCFD; --raised:#E1E9F0;
+    --text:#1B2A3A; --muted:#6B7C8E; --dim:rgba(27,42,58,.5);
+    --line:rgba(27,42,58,.11); --accent:#2C5D8F; --accent-line:rgba(44,93,143,.4);
+    --on-accent:#F7FAFC; --w1:#93A3B4; --w2:#5E7EA0; --w3:#2C5D8F;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg)}
+  body{
+    color:var(--text);font-family:"IBM Plex Sans",system-ui,sans-serif;
+    font-size:16px;line-height:1.5;padding:18px 14px 48px;
+    max-width:620px;margin:0 auto;-webkit-font-smoothing:antialiased;
+    transition:background .25s,color .25s;
+  }
+
+  /* --- pasek nagłówka ------------------------------------------- */
+  .bar{display:flex;align-items:flex-start;gap:8px;margin-bottom:16px}
+  /* Dwie linie: rodzaj okresu na górze, zakres dat pod spodem.
+     Mniejszy stopień, żeby "Tydzień 31" i pełna data mieściły się na telefonie. */
+  .month{
+    font-family:Fraunces,Georgia,serif;font-weight:500;font-size:18px;
+    margin:0;flex:1;min-width:0;letter-spacing:-.01em;line-height:1.2;
+    text-transform:capitalize;
+  }
+  .month small{
+    display:block;font-family:"IBM Plex Sans",sans-serif;font-weight:400;
+    font-size:12.5px;color:var(--dim);letter-spacing:0;text-transform:none;
+    line-height:1.3;margin-top:1px;
+  }
+  .nav{display:flex;gap:6px}
+  .nav{flex:none}
+  .nav button, .today{
+    background:var(--surface);border:1px solid var(--line);border-radius:10px;
+    color:var(--muted);font:inherit;font-size:15px;width:36px;height:36px;
+    cursor:pointer;display:grid;place-items:center;
+  }
+  .today{width:auto;padding:0 12px;font-size:13px}
+  .nav button:hover,.today:hover{color:var(--text);border-color:var(--accent-line)}
+
+  .tabs{display:flex;gap:6px;margin-bottom:14px}
+  .tabs button{
+    flex:1;padding:9px;background:var(--surface);border:1px solid var(--line);
+    border-radius:10px;color:var(--dim);font:inherit;font-size:14px;cursor:pointer;
+  }
+  .tabs button[aria-pressed=true]{
+    background:var(--raised);border-color:var(--accent-line);color:var(--text);font-weight:600;
+  }
+
+  /* --- siatka miesiąca ------------------------------------------ */
+  /* Szyna z numerami tygodni ISO po lewej — wymóg obowiązkowy,
+     a jednocześnie rzecz, którą większość kalendarzy chowa. */
+  .grid{display:grid;grid-template-columns:26px repeat(7,1fr);gap:2px}
+  .hd{
+    font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--muted);text-align:center;padding:6px 0 8px;font-weight:600;
+  }
+  .wk{
+    font-family:"IBM Plex Mono",monospace;font-size:10.5px;color:var(--dim);
+    display:grid;place-items:center;cursor:pointer;border-radius:6px;
+  }
+  .wk:hover{background:var(--surface);color:var(--accent)}
+  .cell{
+    background:var(--surface);border:1px solid transparent;border-radius:9px;
+    min-height:54px;padding:5px 4px 4px;cursor:pointer;position:relative;
+    display:flex;flex-direction:column;align-items:center;gap:4px;
+  }
+  .cell.out{background:transparent;color:var(--dim);opacity:.45}
+  .cell.sel{border-color:var(--accent-line);background:var(--raised)}
+  .cell .n{font-size:14px;font-variant-numeric:tabular-nums;line-height:1.1}
+  .cell.today .n{
+    background:var(--accent);color:var(--on-accent);font-weight:600;
+    width:23px;height:23px;border-radius:50%;display:grid;place-items:center;
+  }
+  .dots{display:flex;gap:3px;flex-wrap:wrap;justify-content:center}
+  .dot{width:5px;height:5px;border-radius:50%;background:var(--w1)}
+  .dot.w2{background:var(--w2)} .dot.w3{background:var(--w3)}
+  .more{font-size:9.5px;color:var(--dim);line-height:1}
+
+  /* --- agenda wybranego dnia ------------------------------------ */
+  .day{margin-top:18px}
+  .day h2{
+    font-size:11.5px;letter-spacing:.09em;text-transform:uppercase;
+    color:var(--muted);font-weight:600;margin:0 0 10px;
+    display:flex;justify-content:space-between;align-items:baseline;
+  }
+  .day h2 span{font-family:"IBM Plex Mono",monospace;letter-spacing:0;text-transform:none;color:var(--dim)}
+  ul.agenda{list-style:none;margin:0;padding:0;display:grid;gap:7px}
+  ul.agenda li{
+    display:grid;grid-template-columns:52px 3px 1fr;gap:11px;align-items:center;
+    background:var(--surface);border-radius:10px;padding:11px 13px 11px 0;
+    overflow:hidden;
+  }
+  ul.agenda .t{
+    font-family:"IBM Plex Mono",monospace;font-size:13px;color:var(--dim);
+    text-align:right;padding-left:11px;
+  }
+  ul.agenda .rail{align-self:stretch;background:var(--w1);border-radius:2px}
+  ul.agenda .rail.w2{background:var(--w2)} ul.agenda .rail.w3{background:var(--w3)}
+  ul.agenda .nm{font-size:15px}
+  ul.agenda .rep{font-size:11.5px;color:var(--dim)}
+  .none{color:var(--dim);font-size:14px;margin:0}
+
+  /* --- widok tygodnia ------------------------------------------- */
+  .weekhd{display:grid;grid-template-columns:38px repeat(7,1fr);gap:2px;margin-bottom:4px}
+  .weekhd div{text-align:center;font-size:10.5px;color:var(--muted);text-transform:uppercase;
+    letter-spacing:.06em;font-weight:600;padding-bottom:4px}
+  .weekhd div b{display:block;font-size:15px;color:var(--text);font-weight:500;
+    text-transform:none;letter-spacing:0;font-variant-numeric:tabular-nums}
+  .weekhd div.td b{color:var(--accent)}
+
+  .allday{display:grid;grid-template-columns:38px repeat(7,1fr);gap:2px;margin-bottom:6px}
+  .allday .lbl{font-size:9.5px;color:var(--dim);display:grid;place-items:center;text-align:center}
+  .allday .slot{min-height:20px;display:grid;gap:2px;align-content:start}
+  .allday .ev{
+    font-size:9.5px;background:var(--raised);border-left:2px solid var(--w1);
+    border-radius:3px;padding:2px 3px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
+  }
+  .allday .ev.w2{border-left-color:var(--w2)} .allday .ev.w3{border-left-color:var(--w3)}
+
+  /* Widok dnia — ta sama oś godzin co w tygodniu, ale bloki mają
+     wreszcie miejsce na pełny tytuł, godzinę i regułę powtarzania. */
+  .oneday{display:grid;grid-template-columns:44px 1fr;gap:2px;position:relative}
+  .oneday .daycol{border-left:1px solid var(--line)}
+  .oneday .ev{padding:5px 9px;font-size:13px;border-left-width:3px}
+  .oneday .ev b{font-size:13.5px}
+  .oneday .ev i{font-size:11px}
+  .dayall{display:grid;grid-template-columns:44px 1fr;gap:2px;margin-bottom:6px}
+  .dayall .lbl{font-size:9.5px;color:var(--dim);display:grid;place-items:center;text-align:center}
+  .dayall .slot{display:grid;gap:3px;align-content:start;min-height:22px}
+  .dayall .ev{
+    font-size:12.5px;background:var(--surface);border-left:3px solid var(--w1);
+    border-radius:5px;padding:6px 9px;
+  }
+  .dayall .ev.w2{border-left-color:var(--w2)} .dayall .ev.w3{border-left-color:var(--w3)}
+  .dayall .none{font-size:12px;color:var(--dim);padding:4px 0 0 2px}
+
+  .scroller{
+    max-height:58vh;overflow-y:auto;border-top:1px solid var(--line);
+    scrollbar-width:thin;
+  }
+  .week{display:grid;grid-template-columns:38px repeat(7,1fr);gap:2px;position:relative}
+  .hours{display:grid}
+  .hour{
+    height:46px;font-family:"IBM Plex Mono",monospace;font-size:10.5px;
+    color:var(--dim);text-align:right;padding-right:6px;
+    border-top:1px solid var(--line);transform:translateY(-6px);
+  }
+  .daycol{position:relative;border-left:1px solid var(--line)}
+  .daycol.td{background:rgba(143,184,217,.05)}
+  .lines{position:absolute;inset:0}
+  .lines div{height:46px;border-top:1px solid var(--line)}
+  .ev{
+    position:absolute;left:1px;right:1px;border-radius:5px;
+    background:var(--raised);border-left:2.5px solid var(--w1);
+    padding:3px 4px;font-size:10.5px;line-height:1.25;overflow:hidden;cursor:pointer;
+  }
+  .ev.w2{border-left-color:var(--w2)} .ev.w3{border-left-color:var(--w3)}
+  .ev b{font-weight:500;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ev i{font-style:normal;font-family:"IBM Plex Mono",monospace;font-size:9px;color:var(--dim)}
+  .now{position:absolute;left:0;right:0;height:1.5px;background:var(--accent);z-index:3}
+  .now::before{content:"";position:absolute;left:-3px;top:-3px;width:7px;height:7px;
+    border-radius:50%;background:var(--accent)}
+
+  footer{margin-top:22px;font-size:12px;color:var(--dim);line-height:1.6}
+  footer code{font-family:"IBM Plex Mono",monospace;color:var(--muted)}
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <h1 class="month" id="label"></h1>
+  <button class="today" id="btnToday">Dziś</button>
+  <div class="nav">
+    <button id="prev" aria-label="Poprzedni">‹</button>
+    <button id="next" aria-label="Następny">›</button>
+  </div>
+</div>
+
+<div class="tabs">
+  <button id="tabD" aria-pressed="false">Dzień</button>
+  <button id="tabW" aria-pressed="false">Tydzień</button>
+  <button id="tabM" aria-pressed="true">Miesiąc</button>
+</div>
+
+<div id="viewMonth">
+  <div class="grid" id="grid"></div>
+  <div class="day">
+    <h2 id="dayLabel"></h2>
+    <ul class="agenda" id="agenda"></ul>
+  </div>
+</div>
+
+<div id="viewDay" hidden>
+  <div class="dayall" id="dayAll"></div>
+  <div class="scroller" id="scrollerD">
+    <div class="oneday" id="oneday"></div>
+  </div>
+</div>
+
+<div id="viewWeek" hidden>
+  <div class="weekhd" id="weekhd"></div>
+  <div class="allday" id="alldayRow"></div>
+  <div class="scroller" id="scroller">
+    <div class="week" id="week"></div>
+  </div>
+</div>
+
+<footer id="foot"></footer>
+
+<script>
+/* ================================================================== */
+/* Dane próbne                                                        */
+/* ================================================================== */
+
+const EVENTS=[
+  {t:'Podlewanie',        d:'2026-07-01', time:'07:00', dur:15,  rr:'FREQ=DAILY',                 w:0},
+  {t:'Wywóz śmieci',      d:'2026-07-07', allDay:true,           rr:'FREQ=WEEKLY',                w:0},
+  {t:'Siłownia',          d:'2026-07-02', time:'18:00', dur:75,  rr:'FREQ=WEEKLY;INTERVAL=2',     w:0},
+  {t:'Rachunek za prąd',  d:'2026-07-10', allDay:true,           rr:'FREQ=MONTHLY',               w:1},
+  {t:'Dentysta',          d:'2026-08-04', time:'14:00', dur:45,  w:1},
+  {t:'Przegląd auta',     d:'2026-08-12', time:'10:30', dur:90,  w:2},
+  {t:'Badania okresowe',  d:'2026-08-19', time:'08:00', dur:60,  w:1},
+  {t:'Odbiór paczki',     d:'2026-07-28', time:'16:20', dur:20,  w:0},
+  {t:'Spotkanie zespołu', d:'2026-07-29', time:'11:00', dur:60,  w:1},
+  {t:'Pociąg — zbiórka',  d:'2026-07-30', time:'02:45', dur:30,  w:2},
+  {t:'Urodziny',          d:'2026-08-16', allDay:true,           rr:'FREQ=YEARLY',                w:1},
+  {t:'Opryski',           d:'2026-07-27', time:'06:30', dur:45,  rr:'FREQ=MONTHLY;INTERVAL=3',    w:0},
+];
+
+/* ================================================================== */
+/* Daty                                                               */
+/* ================================================================== */
+
+const U=(y,m,d)=>new Date(Date.UTC(y,m,d));
+const key=d=>d.toISOString().slice(0,10);
+const addD=(d,n)=>{const x=new Date(d);x.setUTCDate(x.getUTCDate()+n);return x};
+const addM=(d,n)=>{const x=new Date(d);const day=x.getUTCDate();x.setUTCDate(1);
+  x.setUTCMonth(x.getUTCMonth()+n);
+  const last=new Date(Date.UTC(x.getUTCFullYear(),x.getUTCMonth()+1,0)).getUTCDate();
+  x.setUTCDate(Math.min(day,last));return x};
+const isoDow=d=>(d.getUTCDay()+6)%7;              // poniedziałek = 0
+const mondayOf=d=>addD(d,-isoDow(d));
+
+/* Numer tygodnia ISO 8601 — tydzień 1 zawiera pierwszy czwartek roku.
+   Zawsze liczony od poniedziałku, niezależnie od preferencji widoku. */
+function isoWeek(d){
+  const t=addD(d,3-isoDow(d));
+  const first=U(t.getUTCFullYear(),0,4);
+  const firstThu=addD(first,3-isoDow(first));
+  return 1+Math.round((t-firstThu)/604800000);
+}
+
+const TODAY=(()=>{const n=new Date();return U(n.getFullYear(),n.getMonth(),n.getDate())})();
+
+/* ================================================================== */
+/* Rozwijanie serii                                                   */
+/* ================================================================== */
+
+function occurrences(from,to){
+  const out=[];
+  for(const e of EVENTS){
+    const [y,m,d]=e.d.split('-').map(Number);
+    const start=U(y,m-1,d);
+    if(!e.rr){
+      if(start>=from&&start<=to)out.push({...e,day:start});
+      continue;
+    }
+    const f=/FREQ=(\w+)/.exec(e.rr)[1];
+    const iv=+((/INTERVAL=(\d+)/.exec(e.rr)||[])[1]||1);
+    for(let n=0;n<800;n++){
+      let c;
+      if(f==='DAILY')c=addD(start,n*iv);
+      else if(f==='WEEKLY')c=addD(start,7*n*iv);
+      else if(f==='MONTHLY')c=addM(start,n*iv);
+      else c=addM(start,12*n*iv);
+      if(c>to)break;
+      if(c>=from)out.push({...e,day:c});
+    }
+  }
+  return out.sort((a,b)=>a.day-b.day
+    || (a.allDay?-1:b.allDay?1:0)
+    || (a.time||'').localeCompare(b.time||'')
+    || b.w-a.w);          // waga rozstrzyga remisy w obrębie dnia
+}
+
+/* ================================================================== */
+/* Widok                                                              */
+/* ================================================================== */
+
+const $=id=>document.getElementById(id);
+const MONTH_YEAR=new Intl.DateTimeFormat('pl-PL',{month:'long',year:'numeric',timeZone:'UTC'});
+const DAY_LONG=new Intl.DateTimeFormat('pl-PL',{weekday:'long',day:'numeric',month:'long',timeZone:'UTC'});
+const DOW_SHORT=['pon','wt','śr','czw','pt','sob','nd'];
+
+let view='month';
+let cursor=new Date(TODAY);
+let selected=new Date(TODAY);
+
+function renderMonth(){
+  const first=U(cursor.getUTCFullYear(),cursor.getUTCMonth(),1);
+  const startGrid=mondayOf(first);
+  const endGrid=addD(startGrid,41);
+  const map=new Map();
+  for(const o of occurrences(startGrid,endGrid)){
+    const k=key(o.day); if(!map.has(k))map.set(k,[]); map.get(k).push(o);
+  }
+
+  let html='<div class="hd"></div>'+DOW_SHORT.map(d=>`<div class="hd">${d}</div>`).join('');
+  for(let r=0;r<6;r++){
+    const rowStart=addD(startGrid,r*7);
+    html+=`<div class="wk" data-wk="${key(rowStart)}" title="Tydzień ${isoWeek(rowStart)}">${isoWeek(rowStart)}</div>`;
+    for(let c=0;c<7;c++){
+      const d=addD(rowStart,c);
+      const evs=map.get(key(d))||[];
+      const out=d.getUTCMonth()!==cursor.getUTCMonth();
+      const cls=['cell'];
+      if(out)cls.push('out');
+      if(+d===+TODAY)cls.push('today');
+      if(+d===+selected)cls.push('sel');
+      const shown=evs.slice(0,4);
+      html+=`<div class="${cls.join(' ')}" data-d="${key(d)}">
+        <span class="n">${d.getUTCDate()}</span>
+        <span class="dots">${shown.map(e=>`<i class="dot w${e.w+1}"></i>`).join('')}</span>
+        ${evs.length>4?`<span class="more">+${evs.length-4}</span>`:''}
+      </div>`;
+    }
+  }
+  $('grid').innerHTML=html;
+  renderAgenda();
+}
+
+function renderAgenda(){
+  $('dayLabel').innerHTML=DAY_LONG.format(selected)+`<span>tydz. ${isoWeek(selected)}</span>`;
+  const evs=occurrences(selected,selected);
+  $('agenda').innerHTML=evs.length
+    ? evs.map(e=>`<li>
+        <span class="t">${e.allDay?'—':e.time}</span>
+        <span class="rail w${e.w+1}"></span>
+        <span><span class="nm">${e.t}</span>${e.rr?`<br><span class="rep">${repLabel(e.rr)}</span>`:''}</span>
+      </li>`).join('')
+    : '<p class="none">Nic zaplanowanego.</p>';
+}
+
+function repLabel(rr){
+  const f=/FREQ=(\w+)/.exec(rr)[1];
+  const iv=+((/INTERVAL=(\d+)/.exec(rr)||[])[1]||1);
+  if(f==='DAILY')return iv>1?`co ${iv} dni`:'codziennie';
+  if(f==='WEEKLY')return iv>1?`co ${iv} tygodnie`:'co tydzień';
+  if(f==='MONTHLY')return iv>1?`co ${iv} miesiące`:'co miesiąc';
+  return 'co roku';
+}
+
+function renderWeek(){
+  const mon=mondayOf(cursor);
+  const sun=addD(mon,6);
+  const evs=occurrences(mon,sun);
+
+  $('weekhd').innerHTML='<div></div>'+[...Array(7)].map((_,i)=>{
+    const d=addD(mon,i);
+    return `<div class="${+d===+TODAY?'td':''}">${DOW_SHORT[i]}<b>${d.getUTCDate()}</b></div>`;
+  }).join('');
+
+  const allDay=evs.filter(e=>e.allDay);
+  $('alldayRow').innerHTML='<div class="lbl">cały<br>dzień</div>'+[...Array(7)].map((_,i)=>{
+    const d=addD(mon,i);
+    const list=allDay.filter(e=>+e.day===+d);
+    return `<div class="slot">${list.map(e=>`<div class="ev w${e.w+1}">${e.t}</div>`).join('')}</div>`;
+  }).join('');
+
+  let hours='<div class="hours">';
+  for(let h=0;h<24;h++)hours+=`<div class="hour">${String(h).padStart(2,'0')}</div>`;
+  hours+='</div>';
+
+  let cols='';
+  for(let i=0;i<7;i++){
+    const d=addD(mon,i);
+    const list=evs.filter(e=>!e.allDay&&+e.day===+d);
+    let blocks='';
+    for(const e of list){
+      const [hh,mm]=e.time.split(':').map(Number);
+      const top=(hh*60+mm)/60*46;
+      const h=Math.max(16,(e.dur||60)/60*46-2);
+      blocks+=`<div class="ev w${e.w+1}" style="top:${top}px;height:${h}px">
+        <b>${e.t}</b>${h>28?`<i>${e.time}</i>`:''}</div>`;
+    }
+    const isToday=+d===+TODAY;
+    let nowLine='';
+    if(isToday){
+      const n=new Date();
+      nowLine=`<div class="now" style="top:${(n.getHours()*60+n.getMinutes())/60*46}px"></div>`;
+    }
+    cols+=`<div class="daycol${isToday?' td':''}">
+      <div class="lines">${'<div></div>'.repeat(24)}</div>${blocks}${nowLine}</div>`;
+  }
+  $('week').innerHTML=hours+cols;
+}
+
+const D_SHORT=new Intl.DateTimeFormat('pl-PL',{day:'numeric',month:'short',timeZone:'UTC'});
+const D_FULL =new Intl.DateTimeFormat('pl-PL',{day:'numeric',month:'short',year:'numeric',timeZone:'UTC'});
+
+function renderDay(){
+  const evs=occurrences(cursor,cursor);
+  const allDay=evs.filter(e=>e.allDay);
+  const timed=evs.filter(e=>!e.allDay);
+
+  $('dayAll').innerHTML='<div class="lbl">cały<br>dzień</div>'+
+    '<div class="slot">'+(allDay.length
+      ? allDay.map(e=>`<div class="ev w${e.w+1}">${e.t}</div>`).join('')
+      : '<div class="none">—</div>')+'</div>';
+
+  let hours='<div class="hours">';
+  for(let h=0;h<24;h++)hours+=`<div class="hour">${String(h).padStart(2,'0')}</div>`;
+  hours+='</div>';
+
+  let blocks='';
+  for(const e of timed){
+    const [hh,mm]=e.time.split(':').map(Number);
+    const top=(hh*60+mm)/60*46;
+    const h=Math.max(22,(e.dur||60)/60*46-2);
+    blocks+=`<div class="ev w${e.w+1}" style="top:${top}px;height:${h}px">
+      <b>${e.t}</b>${h>34?`<i>${e.time}${e.rr?' · '+repLabel(e.rr):''}</i>`:''}</div>`;
+  }
+  let nowLine='';
+  if(+cursor===+TODAY){
+    const n=new Date();
+    nowLine=`<div class="now" style="top:${(n.getHours()*60+n.getMinutes())/60*46}px"></div>`;
+  }
+  $('oneday').innerHTML=hours+
+    `<div class="daycol"><div class="lines">${'<div></div>'.repeat(24)}</div>${blocks}${nowLine}</div>`;
+}
+
+function label(){
+  if(view==='day'){
+    const wd=new Intl.DateTimeFormat('pl-PL',{weekday:'long',timeZone:'UTC'}).format(cursor);
+    const dt=new Intl.DateTimeFormat('pl-PL',{day:'numeric',month:'long',year:'numeric',timeZone:'UTC'}).format(cursor);
+    $('label').innerHTML=`${wd}<small>${dt} · tydz. ${isoWeek(cursor)}</small>`;
+  }else if(view==='month'){
+    const [mo,yr]=MONTH_YEAR.format(cursor).split(' ');
+    $('label').innerHTML=`${mo}<small>${yr}</small>`;
+  }else{
+    const mon=mondayOf(cursor), sun=addD(mon,6);
+    $('label').innerHTML=
+      `Tydzień ${isoWeek(mon)}<small>${D_SHORT.format(mon)} – ${D_FULL.format(sun)}</small>`;
+  }
+}
+
+function render(){
+  label();
+  $('viewMonth').hidden=view!=='month';
+  $('viewWeek').hidden=view!=='week';
+  $('viewDay').hidden=view!=='day';
+  $('tabM').setAttribute('aria-pressed',String(view==='month'));
+  $('tabW').setAttribute('aria-pressed',String(view==='week'));
+  $('tabD').setAttribute('aria-pressed',String(view==='day'));
+  if(view==='month')renderMonth();
+  else if(view==='day'){renderDay(); $('scrollerD').scrollTop=Math.max(0,scrollTarget()-46);}
+  else {renderWeek(); $('scroller').scrollTop=Math.max(0,scrollTarget()-46);}
+}
+
+/* Oś przewija się do pierwszego wydarzenia dnia, a nie sztywno do 6:00 —
+   przy zbiórce o 2:45 sztywna wartość chowałaby ją nad krawędzią. */
+function scrollTarget(){
+  const from=view==='day'?cursor:mondayOf(cursor);
+  const to=view==='day'?cursor:addD(from,6);
+  const timed=occurrences(from,to).filter(e=>!e.allDay);
+  if(!timed.length)return 7*46;
+  const earliest=Math.min(...timed.map(e=>{
+    const [h,m]=e.time.split(':').map(Number); return h*60+m;
+  }));
+  return earliest/60*46;
+}
+
+$('grid').addEventListener('click',e=>{
+  const cell=e.target.closest('.cell');
+  if(cell){
+    const [y,m,d]=cell.dataset.d.split('-').map(Number);
+    const clicked=U(y,m-1,d);
+    // Dotknięcie już zaznaczonego dnia otwiera widok dnia:
+    // pierwsze dotknięcie pokazuje podgląd, drugie wchodzi głębiej.
+    if(+clicked===+selected){cursor=clicked;view='day';render();return}
+    selected=clicked;renderMonth();return}
+  const wk=e.target.closest('.wk');
+  if(wk){const [y,m,d]=wk.dataset.wk.split('-').map(Number);
+    cursor=U(y,m-1,d);view='week';render()}
+});
+$('tabM').onclick=()=>{view='month';render()};
+$('tabW').onclick=()=>{view='week';render()};
+$('tabD').onclick=()=>{view='day';render()};
+
+const step=n=>view==='month'?addM(cursor,n):addD(cursor,view==='week'?7*n:n);
+$('prev').onclick=()=>{cursor=step(-1);render()};
+$('next').onclick=()=>{cursor=step(1);render()};
+
+/* "Dziś" prowadzi do dnia dzisiejszego, nie tylko przesuwa bieżący widok. */
+$('btnToday').onclick=()=>{
+  cursor=new Date(TODAY); selected=new Date(TODAY);
+  view='day'; render();
+};
+
+$('foot').innerHTML='Numery tygodni po lewej to <code>ISO 8601</code> — tydzień 1 zawiera pierwszy '+
+  'czwartek roku, więc 1 stycznia bywa tygodniem 52 lub 53 roku poprzedniego. Dotknij numeru, '+
+  'żeby przejść do tygodnia. Dotknij zaznaczonego dnia w siatce, żeby otworzyć widok dnia. '+
+  'W obrębie dnia kolejność ustala godzina, a przy równych godzinach — waga.';
+
+render();
+</script>
+</body>
+</html>

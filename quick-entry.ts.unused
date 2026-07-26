@@ -1,0 +1,538 @@
+/**
+ * Next Door Callendar — parser szybkiego dodawania (PL)
+ *
+ * Zamiennik tworzenia wydarzeń z języka naturalnego bez udziału modelu AI.
+ * Funkcja czysta: brak I/O, brak zależności, deterministyczna, testowalna.
+ *
+ * Zwraca czas jako lokalny "wall clock" (bez strefy). Konwersja na UTC
+ * należy do warstwy zapisu, która zna strefę użytkownika — dzięki temu
+ * parser nie potrzebuje biblioteki stref czasowych.
+ */
+
+export interface Category {
+  id: string;
+  name: string;
+}
+
+export interface MatchedSpan {
+  /** nazwa reguły, która zjadła ten fragment — do podświetlenia w UI */
+  rule: string;
+  start: number;
+  end: number;
+  text: string;
+}
+
+export interface EventDraft {
+  /** tekst po usunięciu rozpoznanych fragmentów */
+  title: string;
+  /** "YYYY-MM-DD" gdy allDay, "YYYY-MM-DDTHH:mm" gdy godzinowe */
+  startLocal: string;
+  allDay: boolean;
+  durationMinutes: number | null;
+  rrule: string | null;
+  categoryId: string | null;
+  priority: number;
+  /** czy w tekście był jakikolwiek sygnał czasu — jeśli nie, data jest domyślna */
+  hasExplicitDate: boolean;
+  /** godzina ma sensowny drugi odczyt — UI powinno pokazać przełącznik */
+  hourAmbiguous: boolean;
+  /** alternatywna godzina (±12 h) albo null */
+  alternativeHour: number | null;
+  matched: MatchedSpan[];
+}
+
+/* ------------------------------------------------------------------ */
+/* Normalizacja                                                        */
+/* ------------------------------------------------------------------ */
+
+const FOLD: Record<string, string> = {
+  ą: 'a', ć: 'c', ę: 'e', ł: 'l', ń: 'n',
+  ó: 'o', ś: 's', ź: 'z', ż: 'z',
+};
+
+/** Składanie 1:1 — indeksy znaków zostają zgodne z oryginałem. */
+function fold(s: string): string {
+  let out = '';
+  for (const ch of s.toLowerCase()) out += FOLD[ch] ?? ch;
+  return out;
+}
+
+/* ------------------------------------------------------------------ */
+/* Arytmetyka dat cywilnych                                            */
+/* ------------------------------------------------------------------ */
+
+interface Civil { y: number; m: number; d: number; h: number; min: number }
+
+/**
+ * Bieżący czas ścienny w danej strefie, bez biblioteki stref —
+ * Intl rozwiązuje to poprawnie łącznie ze zmianą czasu.
+ */
+function wallClockNow(now: Date, timeZone: string): Civil {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(now);
+  const get = (t: string) => Number(parts.find((p) => p.type === t)!.value);
+  return { y: get('year'), m: get('month'), d: get('day'), h: get('hour'), min: get('minute') };
+}
+
+/** Nośnik daty cywilnej oparty na UTC — brak pułapek DST przy dodawaniu dni. */
+function toCarrier(c: Civil): Date {
+  return new Date(Date.UTC(c.y, c.m - 1, c.d, c.h, c.min));
+}
+
+function fromCarrier(d: Date): Civil {
+  return {
+    y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate(),
+    h: d.getUTCHours(), min: d.getUTCMinutes(),
+  };
+}
+
+function addDays(c: Civil, n: number): Civil {
+  const d = toCarrier(c);
+  d.setUTCDate(d.getUTCDate() + n);
+  return fromCarrier(d);
+}
+
+function addMonths(c: Civil, n: number): Civil {
+  const d = toCarrier(c);
+  const day = d.getUTCDate();
+  d.setUTCDate(1);
+  d.setUTCMonth(d.getUTCMonth() + n);
+  const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  d.setUTCDate(Math.min(day, last));
+  return fromCarrier(d);
+}
+
+function weekdayOf(c: Civil): number {
+  return toCarrier(c).getUTCDay(); // 0 = niedziela
+}
+
+const pad = (n: number) => String(n).padStart(2, '0');
+
+/* ------------------------------------------------------------------ */
+/* Słowniki                                                            */
+/* ------------------------------------------------------------------ */
+
+/** formy mianownika i biernika — "w środę", "we wtorek" */
+const WEEKDAYS: Array<[RegExp, number, string]> = [
+  [/poniedzialek|poniedzialku/, 1, 'MO'],
+  [/wtorek|wtorku/,             2, 'TU'],
+  [/srode|sroda|srody/,         3, 'WE'],
+  [/czwartek|czwartku/,         4, 'TH'],
+  [/piatek|piatku/,             5, 'FR'],
+  [/sobote|sobota|soboty/,      6, 'SA'],
+  [/niedziele|niedziela/,       0, 'SU'],
+];
+
+const WEEKDAY_RE = /(poniedzialk?u?|poniedzialek|wtorku|wtorek|srode|sroda|srody|czwartku|czwartek|piatku|piatek|sobote|sobota|soboty|niedziele|niedziela)/;
+
+const MONTHS: Record<string, number> = {
+  stycznia: 1, styczen: 1, lutego: 2, luty: 2, marca: 3, marzec: 3,
+  kwietnia: 4, kwiecien: 4, maja: 5, maj: 5, czerwca: 6, czerwiec: 6,
+  lipca: 7, lipiec: 7, sierpnia: 8, sierpien: 8, wrzesnia: 9, wrzesien: 9,
+  pazdziernika: 10, pazdziernik: 10, listopada: 11, listopad: 11,
+  grudnia: 12, grudzien: 12,
+};
+
+const MONTH_RE = new RegExp(`(${Object.keys(MONTHS).join('|')})`);
+
+/** liczebniki porządkowe w dopełniaczu — "wpół do trzeciej" */
+const ORDINAL_HOUR: Record<string, number> = {
+  pierwszej: 1, drugiej: 2, trzeciej: 3, czwartej: 4, piatej: 5, szostej: 6,
+  siodmej: 7, osmej: 8, dziewiatej: 9, dziesiatej: 10, jedenastej: 11, dwunastej: 12,
+};
+
+/** liczebniki porządkowe interwału — "co drugi czwartek" */
+const ORDINAL_INTERVAL: Record<string, number> = {
+  drugi: 2, drugie: 2, druga: 2, drugą: 2,
+  trzeci: 3, trzecie: 3, trzecia: 3,
+  czwarty: 4, czwarte: 4, czwarta: 4,
+};
+
+const DAYPARTS: Record<string, number> = {
+  rano: 9, ranem: 9, przedpoludniem: 10, poludnie: 12,
+  popoludniu: 15, 'po poludniu': 15, wieczorem: 19, wieczor: 19, noca: 22, nocy: 22,
+};
+
+/* ------------------------------------------------------------------ */
+/* Parser                                                              */
+/* ------------------------------------------------------------------ */
+
+export interface ParseOptions {
+  timeZone?: string;
+  categories?: Category[];
+  /** domyślny czas trwania, gdy podano godzinę bez zakresu */
+  defaultDurationMinutes?: number;
+}
+
+export function parseQuickEntry(
+  text: string,
+  now: Date = new Date(),
+  opts: ParseOptions = {},
+): EventDraft {
+  const timeZone = opts.timeZone ?? 'Europe/Warsaw';
+  const categories = opts.categories ?? [];
+  const defaultDuration = opts.defaultDurationMinutes ?? 60;
+
+  const today = wallClockNow(now, timeZone);
+  const hay = fold(text);
+  const mask = new Array(text.length).fill(false);
+  const matched: MatchedSpan[] = [];
+
+  let date: Civil | null = null;
+  let hour: number | null = null;
+  let minute = 0;
+  let endHour: number | null = null;
+  let endMinute = 0;
+  let duration: number | null = null;
+  let rrule: string | null = null;
+  let categoryId: string | null = null;
+  let priority = 0;
+  let hourWasExplicit = false;
+  /** godzina tak, jak ją zapisano — przed korektą pory dnia */
+  let writtenHour: number | null = null;
+  /** godzina podana słownie ("o trzeciej"), nie cyframi */
+  let hourFromWords = false;
+
+  /** Szuka wzorca poza już zamaskowanymi fragmentami. */
+  function find(re: RegExp): RegExpExecArray | null {
+    const g = new RegExp(re.source, 'g' + (re.flags.includes('i') ? 'i' : ''));
+    let m: RegExpExecArray | null;
+    while ((m = g.exec(hay)) !== null) {
+      const s = m.index;
+      const e = s + m[0].length;
+      let clean = true;
+      for (let i = s; i < e; i++) if (mask[i]) { clean = false; break; }
+      if (clean) return m;
+      if (g.lastIndex === m.index) g.lastIndex++;
+    }
+    return null;
+  }
+
+  function consume(rule: string, m: RegExpExecArray): void {
+    const s = m.index;
+    const e = s + m[0].length;
+    for (let i = s; i < e; i++) mask[i] = true;
+    matched.push({ rule, start: s, end: e, text: text.slice(s, e) });
+  }
+
+  /* -- 1. priorytet: !1 !2 !3 ------------------------------------- */
+  {
+    const m = find(/!([1-3])\b/);
+    if (m) { priority = Number(m[1]); consume('priority', m); }
+  }
+
+  /* -- 2. kategoria: @nazwa lub #nazwa ---------------------------- */
+  {
+    const m = find(/[@#]([a-z0-9_-]+)/);
+    if (m) {
+      const hit = categories.find((c) => fold(c.name) === m[1]);
+      if (hit) { categoryId = hit.id; consume('category', m); }
+    }
+  }
+  if (!categoryId && categories.length) {
+    for (const c of categories) {
+      const m = find(new RegExp(`\\b${fold(c.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`));
+      if (m) { categoryId = c.id; consume('category', m); break; }
+    }
+  }
+
+  /* -- 3. cykliczność (przed reguła dnia tygodnia!) ---------------- */
+  {
+    // "co drugi czwartek", "co 3 tygodnie", "co tydzien", "codziennie",
+    // "w kazdy piatek", "co piatek", "co miesiac", "co roku"
+    let m = find(new RegExp(`\\bco\\s+(${Object.keys(ORDINAL_INTERVAL).map(fold).join('|')}|\\d+)?\\s*${WEEKDAY_RE.source}\\b`));
+    if (m) {
+      const wd = WEEKDAYS.find(([re]) => re.test(m![2]))!;
+      const n = m[1] ? (ORDINAL_INTERVAL[m[1]] ?? Number(m[1])) : 1;
+      rrule = `FREQ=WEEKLY;BYDAY=${wd[2]}` + (n > 1 ? `;INTERVAL=${n}` : '');
+      consume('recurrence', m);
+    }
+    if (!rrule && (m = find(new RegExp(`\\b(?:w\\s+)?kazd(?:y|a|ą)\\s+${WEEKDAY_RE.source}\\b`)))) {
+      const wd = WEEKDAYS.find(([re]) => re.test(m![1]))!;
+      rrule = `FREQ=WEEKLY;BYDAY=${wd[2]}`;
+      consume('recurrence', m);
+    }
+    if (!rrule && (m = find(/\bcodziennie\b/))) { rrule = 'FREQ=DAILY'; consume('recurrence', m); }
+    if (!rrule && (m = find(/\bco\s+(\d+)\s+dni\b/))) { rrule = `FREQ=DAILY;INTERVAL=${m[1]}`; consume('recurrence', m); }
+    if (!rrule && (m = find(/\bco\s+(\d+)\s+tygodni(?:e|a)?\b/))) { rrule = `FREQ=WEEKLY;INTERVAL=${m[1]}`; consume('recurrence', m); }
+    if (!rrule && (m = find(/\bco\s+tydzien\b/))) { rrule = 'FREQ=WEEKLY'; consume('recurrence', m); }
+    if (!rrule && (m = find(/\bco\s+(\d+)\s+miesi(?:ac|ace|ecy)\b/))) { rrule = `FREQ=MONTHLY;INTERVAL=${m[1]}`; consume('recurrence', m); }
+    if (!rrule && (m = find(/\bco\s+miesiac\b/))) { rrule = 'FREQ=MONTHLY'; consume('recurrence', m); }
+    if (!rrule && (m = find(/\bco\s+(?:rok|roku)\b/))) { rrule = 'FREQ=YEARLY'; consume('recurrence', m); }
+  }
+
+  /* -- 4. zakres godzin: 10:00-11:30, od 10 do 12 ------------------ */
+  {
+    let m = find(/\b(\d{1,2})(?:[:.](\d{2}))?\s*[-–]\s*(\d{1,2})(?:[:.](\d{2}))?\b/);
+    if (!m) m = find(/\bod\s+(\d{1,2})(?:[:.](\d{2}))?\s+do\s+(\d{1,2})(?:[:.](\d{2}))?\b/);
+    if (m) {
+      hour = Number(m[1]); minute = Number(m[2] ?? 0);
+      endHour = Number(m[3]); endMinute = Number(m[4] ?? 0);
+      hourWasExplicit = true; writtenHour = hour;
+      consume('timeRange', m);
+    }
+  }
+
+  /* -- 5. czas trwania: na godzine, na pol godziny, na 45 minut ---- */
+  if (duration === null) {
+    let m = find(/\bna\s+(\d+(?:[.,]\d+)?)\s*(?:h|godz(?:in[ye]?)?)\b/);
+    if (m) { duration = Math.round(parseFloat(m[1].replace(',', '.')) * 60); consume('duration', m); }
+    else if ((m = find(/\bna\s+pol\s+godziny\b/))) { duration = 30; consume('duration', m); }
+    else if ((m = find(/\bna\s+godzine\b/))) { duration = 60; consume('duration', m); }
+    else if ((m = find(/\bna\s+(\d+)\s*(?:min|minut[ye]?)\b/))) { duration = Number(m[1]); consume('duration', m); }
+  }
+
+  /* -- 6. data jawna: 15.03.2027, 15.03, 15 marca ------------------ */
+  {
+    let m = find(/\b(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?\b/);
+    if (m) {
+      const d = Number(m[1]); const mo = Number(m[2]);
+      let y = m[3] ? Number(m[3]) : today.y;
+      if (y < 100) y += 2000;
+      if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
+        date = { y, m: mo, d, h: 0, min: 0 };
+        if (!m[3] && toCarrier(date) < toCarrier({ ...today, h: 0, min: 0 })) date = { ...date, y: y + 1 };
+        consume('date', m);
+      }
+    }
+    if (!date && (m = find(new RegExp(`\\b(\\d{1,2})\\s+${MONTH_RE.source}(?:\\s+(\\d{4}))?\\b`)))) {
+      const d = Number(m[1]); const mo = MONTHS[m[2]];
+      const y = m[3] ? Number(m[3]) : today.y;
+      date = { y, m: mo, d, h: 0, min: 0 };
+      if (!m[3] && toCarrier(date) < toCarrier({ ...today, h: 0, min: 0 })) date = { ...date, y: y + 1 };
+      consume('date', m);
+    }
+  }
+
+  /* -- 7. przesunięcia: za 3 dni, za pol roku, za 6 miesiecy ------- */
+  if (!date) {
+    let m = find(/\bza\s+(\d+)\s+dni?\b/);
+    if (m) { date = addDays(today, Number(m[1])); consume('offset', m); }
+    else if ((m = find(/\bza\s+(\d+)\s+tygodni(?:e|a)?\b/))) { date = addDays(today, 7 * Number(m[1])); consume('offset', m); }
+    else if ((m = find(/\bza\s+tydzien\b/))) { date = addDays(today, 7); consume('offset', m); }
+    else if ((m = find(/\bza\s+pol\s+roku\b/))) { date = addMonths(today, 6); consume('offset', m); }
+    else if ((m = find(/\bza\s+(\d+)\s+miesi(?:ac|ace|ecy)\b/))) { date = addMonths(today, Number(m[1])); consume('offset', m); }
+    else if ((m = find(/\bza\s+miesiac\b/))) { date = addMonths(today, 1); consume('offset', m); }
+    else if ((m = find(/\bza\s+(\d+)\s+lat[a]?\b/))) { date = addMonths(today, 12 * Number(m[1])); consume('offset', m); }
+    else if ((m = find(/\bza\s+rok\b/))) { date = addMonths(today, 12); consume('offset', m); }
+  }
+
+  /* -- 8. dzień tygodnia: w przyszly wtorek, we wtorek ------------- */
+  if (!date) {
+    const m = find(new RegExp(`\\b(?:w|we)?\\s*(przyszl(?:y|a|ą)|nastepn(?:y|a|ą)|najblizsz(?:y|a|ą))?\\s*${WEEKDAY_RE.source}\\b`));
+    if (m) {
+      const wd = WEEKDAYS.find(([re]) => re.test(m[2]))!;
+      const target = wd[1];
+      const cur = weekdayOf(today);
+      let delta = (target - cur + 7) % 7;
+      if (delta === 0) delta = 7;                 // "we wtorek" we wtorek = za tydzień
+      if (m[1]?.startsWith('przyszl') || m[1]?.startsWith('nastepn')) {
+        // "w przyszły wtorek" = wtorek przyszłego tygodnia
+        if (delta < 7 && cur !== 0) delta += 7 - 0;
+        delta = ((target - cur + 7) % 7) + 7;
+      }
+      date = addDays(today, delta);
+      consume('weekday', m);
+    }
+  }
+
+  /* -- 9. dni względne: dzis, jutro, pojutrze --------------------- */
+  if (!date) {
+    let m = find(/\bpojutrze\b/);
+    if (m) { date = addDays(today, 2); consume('relday', m); }
+    else if ((m = find(/\bjutro\b/))) { date = addDays(today, 1); consume('relday', m); }
+    else if ((m = find(/\b(?:dzis|dzisiaj)\b/))) { date = { ...today }; consume('relday', m); }
+  }
+
+  /* -- 10. godzina: o 14:30, o wpol do trzeciej, godz. 14 ---------- */
+  if (hour === null) {
+    let m = find(new RegExp(`\\b(?:o\\s+)?wpol\\s+do\\s+(${Object.keys(ORDINAL_HOUR).join('|')})\\b`));
+    if (m) {
+      hour = ORDINAL_HOUR[m[1]] - 1; minute = 30; hourWasExplicit = true; writtenHour = hour; hourFromWords = true;
+      consume('time', m);
+    } else if ((m = find(new RegExp(`\\b(?:o\\s+)?(${Object.keys(ORDINAL_HOUR).join('|')})\\b`)))) {
+      hour = ORDINAL_HOUR[m[1]]; minute = 0;
+      hourWasExplicit = true; writtenHour = hour; hourFromWords = true;
+      consume('time', m);
+    } else if ((m = find(/\b(?:o|godz\.?|godzinie)\s*(\d{1,2})(?:[:.](\d{2}))?\b/))) {
+      hour = Number(m[1]); minute = Number(m[2] ?? 0); hourWasExplicit = true; writtenHour = hour;
+      consume('time', m);
+    } else if ((m = find(/\b(\d{1,2}):(\d{2})\b/))) {
+      hour = Number(m[1]); minute = Number(m[2]); hourWasExplicit = true; writtenHour = hour;
+      consume('time', m);
+    }
+  }
+
+  /* -- 11. pory dnia: rano, wieczorem, w poludnie ------------------ */
+  let daypartApplied: string | null = null;
+  {
+    const m = find(new RegExp(`\\b(?:w\\s+)?(${Object.keys(DAYPARTS).join('|')})\\b`));
+    if (m) {
+      daypartApplied = m[1];
+      if (hour === null) { hour = DAYPARTS[m[1]]; minute = 0; }
+      consume('daypart', m);
+    }
+  }
+
+  /* -- 12. pora dnia — wyłącznie z dookreślenia ------------------- */
+  // ZASADA: parser NIGDY po cichu nie przesuwa godziny, którą ktoś zapisał.
+  // "o 3" to 3:00, nie 15:00. Zgadywanie zawodzi asymetrycznie — pomyłka
+  // o dwanaście godzin przy zbiórce na nocny pociąg kosztuje przejazd,
+  // a w podglądzie wygląda na poprawną godzinę, więc nie rzuca się w oczy.
+  // Godzinę zmienia wyłącznie to, co użytkownik faktycznie napisał.
+  // "o 3" znaczy 15:00 — nikt nie umawia się na trzecią w nocy.
+  // Ale "o 7" znaczy 7 rano: w polskim uzusie siódma bez dookreślenia
+  // to poranek, nie wieczór. Granica leży między piątą a szóstą.
+  const MORNING = ['rano', 'ranem', 'przedpoludniem'];
+  const EVENING = ['popoludniu', 'po poludniu', 'wieczorem', 'wieczor'];
+
+  if (hourWasExplicit && hour !== null) {
+    const bump = () => {
+      hour! < 12 && (hour = hour! + 12);
+      if (endHour !== null && endHour < 12) endHour += 12;
+    };
+
+    if (daypartApplied && EVENING.includes(daypartApplied)) {
+      bump();                                     // "o 7 wieczorem" = 19:00
+    } else if (daypartApplied === 'noca' || daypartApplied === 'nocy') {
+      if (hour > 4 && hour < 12) bump();          // "o 11 w nocy" = 23:00, "o 2 w nocy" = 2:00
+    }
+    // Brak dookreślenia → godzina zostaje taka, jak ją zapisano.
+  }
+  if (endHour !== null && hour !== null && endHour < hour) endHour += 12;
+
+  // Niejednoznaczność siedzi w SŁOWACH, nie w cyfrach.
+  // W polskich kalendarzach zapis cyfrowy jest zawsze 24-godzinny: kto ma na
+  // myśli piętnastą, pisze 15. Więc "o 3" to 3:00 i nie ma tu czego rozstrzygać.
+  // Ale "o trzeciej" wypowiedziane czy podyktowane bywa i trzecią, i piętnastą —
+  // i tylko wtedy pokazujemy alternatywę.
+  // Skutek uboczny jest korzystny: precyzyjne godziny nocne (2:45, 4:20) zapisuje
+  // się cyframi, więc najgroźniejszy przypadek nigdy nie trafia w heurystykę.
+  const hourAmbiguous =
+    hourFromWords && !daypartApplied && hour !== null && hour >= 1 && hour <= 11;
+  const alternativeHour = hourAmbiguous ? hour! + 12 : null;
+
+  /* -- 13. złożenie wyniku ---------------------------------------- */
+  const hasExplicitDate = date !== null || hour !== null;
+  let base: Civil = date ?? { ...today };
+
+  // DTSTART musi spełniać własny RRULE — "co drugi czwartek" zaczyna się
+  // w najbliższy czwartek, nie w dniu wpisania.
+  if (!date && rrule) {
+    const byday = /BYDAY=(\w\w)/.exec(rrule)?.[1];
+    if (byday) {
+      const wd = WEEKDAYS.find(([, , code]) => code === byday);
+      if (wd) base = addDays(today, (wd[1] - weekdayOf(today) + 7) % 7);
+    }
+  }
+
+  if (hour !== null) {
+    // brak daty + godzina już minęła → jutro
+    if (!date) {
+      const passed = hour < today.h || (hour === today.h && minute <= today.min);
+      if (passed) base = addDays(today, 1);
+    }
+    base = { ...base, h: hour, min: minute };
+  } else {
+    base = { ...base, h: 0, min: 0 };
+  }
+
+  const allDay = hour === null;
+
+  if (duration === null && endHour !== null) {
+    duration = (endHour * 60 + endMinute) - (base.h * 60 + base.min);
+    if (duration <= 0) duration += 24 * 60;
+  }
+  if (duration === null && !allDay) duration = defaultDuration;
+
+  const startLocal = allDay
+    ? `${base.y}-${pad(base.m)}-${pad(base.d)}`
+    : `${base.y}-${pad(base.m)}-${pad(base.d)}T${pad(base.h)}:${pad(base.min)}`;
+
+  // tytuł: to, czego żadna reguła nie zjadła
+  let title = '';
+  for (let i = 0; i < text.length; i++) title += mask[i] ? ' ' : text[i];
+  title = title.replace(/\s+/g, ' ').replace(/^[\s,.;:–-]+|[\s,.;:–-]+$/g, '').trim();
+
+  matched.sort((a, b) => a.start - b.start);
+
+  return {
+    title,
+    startLocal,
+    allDay,
+    durationMinutes: duration,
+    rrule,
+    categoryId,
+    priority,
+    hasExplicitDate,
+    hourAmbiguous,
+    alternativeHour,
+    matched,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Podgląd dla UI                                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Nazwy dni i miesięcy pochodzą z Intl — poprawnie odmienione
+ * ("24 lipca", nie "24 lipiec") i utrzymywane przez platformę.
+ * Formatujemy w UTC, bo nośnik daty jest cywilny, nie momentem w czasie.
+ */
+const DATE_FMT = new Intl.DateTimeFormat('pl-PL', {
+  weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+  timeZone: 'UTC',
+});
+
+const RRULE_LABEL: Array<[RegExp, string]> = [
+  [/FREQ=DAILY;INTERVAL=(\d+)/, 'co $1 dni'],
+  [/FREQ=DAILY/, 'codziennie'],
+  [/FREQ=WEEKLY;BYDAY=(\w\w);INTERVAL=(\d+)/, 'co $2 tygodnie'],
+  [/FREQ=WEEKLY;INTERVAL=(\d+)/, 'co $1 tygodnie'],
+  [/FREQ=WEEKLY/, 'co tydzień'],
+  [/FREQ=MONTHLY;INTERVAL=(\d+)/, 'co $1 miesiące'],
+  [/FREQ=MONTHLY/, 'co miesiąc'],
+  [/FREQ=YEARLY/, 'co roku'],
+];
+
+/**
+ * Jednolinijkowa interpretacja pokazywana pod polem wpisywania.
+ * To jest właściwy mechanizm korekty: parser nie musi być bezbłędny,
+ * skoro użytkownik widzi wynik przed zapisem.
+ */
+export function describeDraft(draft: EventDraft, categories: Category[] = []): string {
+  const [datePart, timePart] = draft.startLocal.split('T');
+  const [y, m, d] = datePart.split('-').map(Number);
+  const carrier = new Date(Date.UTC(y, m - 1, d));
+  const bits: string[] = [];
+
+  bits.push(DATE_FMT.format(carrier));
+
+  if (timePart) {
+    let time = timePart;
+    if (draft.durationMinutes) {
+      const end = new Date(Date.UTC(y, m - 1, d,
+        Number(timePart.slice(0, 2)), Number(timePart.slice(3, 5)) + draft.durationMinutes));
+      time += `–${pad(end.getUTCHours())}:${pad(end.getUTCMinutes())}`;
+    }
+    bits.push(time);
+  } else {
+    bits.push('cały dzień');
+  }
+
+  if (draft.rrule) {
+    for (const [re, label] of RRULE_LABEL) {
+      if (re.test(draft.rrule)) { bits.push(draft.rrule.replace(re, label)); break; }
+    }
+  }
+
+  const cat = categories.find((c) => c.id === draft.categoryId);
+  if (cat) bits.push(cat.name);
+  if (draft.priority) bits.push('!'.repeat(4 - draft.priority));
+
+  return bits.join(' · ');
+}
