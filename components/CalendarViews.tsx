@@ -5,6 +5,7 @@ import { isoWeekOf } from '@/lib/iso-week';
 import {
   all as loadEvents,
   create,
+  put,
   purgeOldTrash,
   type EventRecord,
   type Weight,
@@ -84,6 +85,11 @@ function repLabel(rr: string) {
   return 'co roku';
 }
 
+function repeatFromRule(rrule: string | null): Repeat {
+  const freq = /FREQ=(\w+)/.exec(rrule ?? '')?.[1];
+  return freq === 'DAILY' || freq === 'WEEKLY' || freq === 'MONTHLY' || freq === 'YEARLY' ? freq : 'NONE';
+}
+
 function occurrenceFromRecord(e: EventRecord, day: Date): Occurrence {
   return {
     id: e.id,
@@ -156,6 +162,7 @@ export default function CalendarViews() {
   const [events, setEvents] = useState<EventRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [formOpen, setFormOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [notices, setNotices] = useState<ReminderNotice[]>([]);
   const fired = useRef(new Set<string>());
   const scroller = useRef<HTMLDivElement>(null);
@@ -220,6 +227,18 @@ export default function CalendarViews() {
   const step = (n: number) =>
     setCursor(c => view === 'month' ? addM(c, n) : addD(c, view === 'week' ? 7 * n : n));
 
+  const startAdd = () => {
+    setEditingId(null);
+    setFormOpen(true);
+  };
+
+  const startEdit = (id: string) => {
+    setEditingId(id);
+    setFormOpen(true);
+  };
+
+  const editingEvent = editingId ? events.find(e => e.id === editingId) ?? null : null;
+
   return (
     <main className="mx-auto max-w-[620px] px-[14px] pt-[18px] pb-12">
       <header className="mb-4 flex items-start gap-2">
@@ -229,7 +248,7 @@ export default function CalendarViews() {
             {loading ? 'wczytywanie...' : label.sub}
           </small>
         </h1>
-        <button onClick={() => setFormOpen(true)}
+        <button onClick={startAdd}
                 className="h-9 rounded-[10px] border px-3 text-[13px] font-semibold"
                 style={{ background: 'var(--accent)', borderColor: 'var(--accent)', color: 'var(--on-accent)' }}>
           Dodaj
@@ -270,10 +289,11 @@ export default function CalendarViews() {
       {view === 'month' && (
         <MonthView events={events} cursor={cursor} today={today} selected={selected}
                    onPick={d => { if (+d === +selected) { setCursor(d); setView('day'); } else setSelected(d); }}
-                   onWeek={d => { setCursor(d); setView('week'); }} />
+                   onWeek={d => { setCursor(d); setView('week'); }}
+                   onEdit={startEdit} />
       )}
-      {view === 'week' && <WeekView events={events} cursor={cursor} today={today} scroller={scroller} />}
-      {view === 'day' && <DayView events={events} cursor={cursor} today={today} scroller={scroller} />}
+      {view === 'week' && <WeekView events={events} cursor={cursor} today={today} scroller={scroller} onEdit={startEdit} />}
+      {view === 'day' && <DayView events={events} cursor={cursor} today={today} scroller={scroller} onEdit={startEdit} />}
 
       <footer className="mt-6 text-xs leading-relaxed" style={{ color: 'var(--dim)' }}>
         Dane zapisuja sie lokalnie w tej przegladarce. Przypomnienia dzialaja, kiedy aplikacja jest otwarta;
@@ -281,15 +301,20 @@ export default function CalendarViews() {
       </footer>
 
       {formOpen && (
-        <AddEventDialog
+        <EventDialog
           initialDate={iso(selected)}
-          onClose={() => setFormOpen(false)}
+          event={editingEvent}
+          onClose={() => {
+            setFormOpen(false);
+            setEditingId(null);
+          }}
           onSaved={async d => {
             await refresh();
             setSelected(civil(d));
             setCursor(civil(d));
             setView('day');
             setFormOpen(false);
+            setEditingId(null);
           }}
         />
       )}
@@ -339,20 +364,22 @@ function ReminderPanel({ notices, onClear }: { notices: ReminderNotice[]; onClea
   );
 }
 
-function AddEventDialog({ initialDate, onClose, onSaved }: {
+function EventDialog({ initialDate, event, onClose, onSaved }: {
   initialDate: string;
+  event: EventRecord | null;
   onClose: () => void;
   onSaved: (date: string) => void | Promise<void>;
 }) {
-  const [title, setTitle] = useState('');
-  const [date, setDate] = useState(initialDate);
-  const [allDay, setAllDay] = useState(false);
-  const [time, setTime] = useState('09:00');
-  const [duration, setDuration] = useState(60);
-  const [repeat, setRepeat] = useState<Repeat>('NONE');
-  const [reminder, setReminder] = useState('30');
-  const [weight, setWeight] = useState<Weight>(1);
+  const [title, setTitle] = useState(event?.title ?? '');
+  const [date, setDate] = useState(event?.date ?? initialDate);
+  const [allDay, setAllDay] = useState(event ? event.time === null : false);
+  const [time, setTime] = useState(event?.time ?? '09:00');
+  const [duration, setDuration] = useState(event?.durationMinutes ?? 60);
+  const [repeat, setRepeat] = useState<Repeat>(repeatFromRule(event?.rrule ?? null));
+  const [reminder, setReminder] = useState(event ? String(event.reminders[0] ?? 'none') : '30');
+  const [weight, setWeight] = useState<Weight>(event?.weight ?? 1);
   const [saving, setSaving] = useState(false);
+  const isEditing = Boolean(event);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -367,9 +394,9 @@ function AddEventDialog({ initialDate, onClose, onSaved }: {
     const formWeight = Number(data.get('weight') ?? 1) as Weight;
     if (!cleanTitle) return;
     setSaving(true);
-    await create({
+    const input = {
       title: cleanTitle,
-      notes: null,
+      notes: event?.notes ?? null,
       date: formDate,
       time: formAllDay ? null : formTime,
       durationMinutes: formAllDay ? null : formDuration,
@@ -377,8 +404,13 @@ function AddEventDialog({ initialDate, onClose, onSaved }: {
       rrule: formRepeat === 'NONE' ? null : `FREQ=${formRepeat}`,
       reminders: formReminder === 'none' || formAllDay ? [] : [Number(formReminder)],
       weight: formWeight,
-      tags: [],
-    });
+      tags: event?.tags ?? [],
+    };
+    if (event) {
+      await put({ ...event, ...input });
+    } else {
+      await create(input);
+    }
     await onSaved(formDate);
   };
 
@@ -388,7 +420,7 @@ function AddEventDialog({ initialDate, onClose, onSaved }: {
             className="w-full max-w-[520px] rounded-[8px] border p-4 shadow-xl"
             style={{ background: 'var(--bg)', borderColor: 'var(--line)' }}>
         <div className="mb-3 flex items-center gap-2">
-          <h2 className="m-0 flex-1 text-base font-semibold">Dodaj wydarzenie</h2>
+          <h2 className="m-0 flex-1 text-base font-semibold">{isEditing ? 'Edytuj wydarzenie' : 'Dodaj wydarzenie'}</h2>
           <button type="button" onClick={onClose} className="rounded-[8px] border px-3 py-1 text-sm"
                   style={{ borderColor: 'var(--line)', color: 'var(--muted)' }}>
             Zamknij
@@ -473,20 +505,21 @@ function AddEventDialog({ initialDate, onClose, onSaved }: {
         <button disabled={!title.trim() || saving}
                 className="mt-4 w-full rounded-[10px] px-4 py-3 font-semibold disabled:opacity-40"
                 style={{ background: 'var(--accent)', color: 'var(--on-accent)' }}>
-          {saving ? 'Zapisywanie...' : 'Zapisz'}
+          {saving ? 'Zapisywanie...' : isEditing ? 'Zapisz zmiany' : 'Zapisz'}
         </button>
       </form>
     </div>
   );
 }
 
-function MonthView({ events, cursor, today, selected, onPick, onWeek }: {
+function MonthView({ events, cursor, today, selected, onPick, onWeek, onEdit }: {
   events: EventRecord[];
   cursor: Date;
   today: Date | null;
   selected: Date;
   onPick: (d: Date) => void;
   onWeek: (d: Date) => void;
+  onEdit: (id: string) => void;
 }) {
   const first = U(cursor.getUTCFullYear(), cursor.getUTCMonth(), 1);
   const grid = mondayOf(first);
@@ -552,18 +585,20 @@ function MonthView({ events, cursor, today, selected, onPick, onWeek }: {
           {DAY_LONG.format(selected)}
           <span className="font-mono normal-case tracking-normal" style={{ color: 'var(--dim)' }}>tydz. {wk(selected)}</span>
         </h2>
-        {dayEvents.length ? <AgendaList events={dayEvents} /> : <p className="m-0 text-sm" style={{ color: 'var(--dim)' }}>Nic zaplanowanego.</p>}
+        {dayEvents.length ? <AgendaList events={dayEvents} onEdit={onEdit} /> : <p className="m-0 text-sm" style={{ color: 'var(--dim)' }}>Nic zaplanowanego.</p>}
       </section>
     </>
   );
 }
 
-function AgendaList({ events }: { events: Occurrence[] }) {
+function AgendaList({ events, onEdit }: { events: Occurrence[]; onEdit: (id: string) => void }) {
   return (
     <ul className="m-0 grid list-none gap-[7px] p-0">
       {events.map(e => (
-        <li key={`${e.id}:${e.date}`} className="grid items-center gap-[11px] overflow-hidden rounded-[10px] py-[11px] pr-[13px]"
-            style={{ gridTemplateColumns: '52px 3px 1fr', background: 'var(--surface)' }}>
+        <li key={`${e.id}:${e.date}`}>
+          <button type="button" onClick={() => onEdit(e.id)}
+                  className="grid w-full items-center gap-[11px] overflow-hidden rounded-[10px] py-[11px] pr-[13px] text-left"
+                  style={{ gridTemplateColumns: '52px 3px 1fr', background: 'var(--surface)', color: 'var(--text)' }}>
           <span className="pl-[11px] text-right font-mono text-[13px]" style={{ color: 'var(--dim)' }}>
             {e.time ?? '-'}
           </span>
@@ -576,6 +611,7 @@ function AgendaList({ events }: { events: Occurrence[] }) {
               {e.reminders.length ? ` - przypomnienie ${e.reminders[0]} min przed` : ''}
             </span>
           </span>
+          </button>
         </li>
       ))}
     </ul>
@@ -625,15 +661,16 @@ function NowLine({ show }: { show: boolean }) {
   );
 }
 
-function Block({ e, wide }: { e: Occurrence; wide?: boolean }) {
+function Block({ e, wide, onEdit }: { e: Occurrence; wide?: boolean; onEdit: (id: string) => void }) {
   if (!e.time) return null;
   const [hh, mm] = e.time.split(':').map(Number);
   const top = (hh * 60 + mm) / 60 * HOUR_PX;
   const h = Math.max(wide ? 24 : 18, (e.durationMinutes ?? 60) / 60 * HOUR_PX - 2);
   return (
-    <div className="absolute left-px right-px overflow-hidden rounded-[5px] border-l-[3px]"
+    <button type="button" onClick={() => onEdit(e.id)}
+            className="absolute left-px right-px overflow-hidden rounded-[5px] border-l-[3px] text-left"
          style={{
-           top, height: h, background: 'var(--raised)', borderLeftColor: `var(--w${e.weight + 1})`,
+           top, height: h, background: 'var(--raised)', borderLeftColor: `var(--w${e.weight + 1})`, color: 'var(--text)',
            padding: wide ? '5px 9px' : '3px 4px', fontSize: wide ? 13 : 10.5, lineHeight: 1.25,
          }}>
       <b className="block truncate font-medium">{e.title}</b>
@@ -642,15 +679,16 @@ function Block({ e, wide }: { e: Occurrence; wide?: boolean }) {
           {e.time}{e.rrule && wide ? ` - ${repLabel(e.rrule)}` : ''}
         </i>
       )}
-    </div>
+    </button>
   );
 }
 
-function WeekView({ events, cursor, today, scroller }: {
+function WeekView({ events, cursor, today, scroller, onEdit }: {
   events: EventRecord[];
   cursor: Date;
   today: Date | null;
   scroller: React.RefObject<HTMLDivElement | null>;
+  onEdit: (id: string) => void;
 }) {
   const mon = mondayOf(cursor);
   const evs = occurrences(events, mon, addD(mon, 6));
@@ -679,8 +717,9 @@ function WeekView({ events, cursor, today, scroller }: {
           return (
             <div key={i} className="grid min-h-[20px] content-start gap-0.5">
               {evs.filter(e => !e.time && +e.day === +d).map(e => (
-                <div key={`${e.id}:${e.date}`} className="truncate rounded-[3px] border-l-2 px-[3px] py-[2px] text-[9.5px]"
-                     style={{ background: 'var(--raised)', borderLeftColor: `var(--w${e.weight + 1})` }}>{e.title}</div>
+                <button type="button" key={`${e.id}:${e.date}`} onClick={() => onEdit(e.id)}
+                        className="truncate rounded-[3px] border-l-2 px-[3px] py-[2px] text-left text-[9.5px]"
+                        style={{ background: 'var(--raised)', borderLeftColor: `var(--w${e.weight + 1})`, color: 'var(--text)' }}>{e.title}</button>
               ))}
             </div>
           );
@@ -697,7 +736,7 @@ function WeekView({ events, cursor, today, scroller }: {
               <div key={i} className="relative border-l"
                    style={{ borderColor: 'var(--line)', background: isToday ? 'rgba(143,184,217,.05)' : undefined }}>
                 <Lines />
-                {evs.filter(e => e.time && +e.day === +d).map(e => <Block key={`${e.id}:${e.date}`} e={e} />)}
+                {evs.filter(e => e.time && +e.day === +d).map(e => <Block key={`${e.id}:${e.date}`} e={e} onEdit={onEdit} />)}
                 <NowLine show={isToday} />
               </div>
             );
@@ -708,11 +747,12 @@ function WeekView({ events, cursor, today, scroller }: {
   );
 }
 
-function DayView({ events, cursor, today, scroller }: {
+function DayView({ events, cursor, today, scroller, onEdit }: {
   events: EventRecord[];
   cursor: Date;
   today: Date | null;
   scroller: React.RefObject<HTMLDivElement | null>;
+  onEdit: (id: string) => void;
 }) {
   const evs = occurrences(events, cursor, cursor);
   const allDay = evs.filter(e => !e.time);
@@ -723,8 +763,9 @@ function DayView({ events, cursor, today, scroller }: {
         <div className="grid place-items-center text-center text-[9.5px]" style={{ color: 'var(--dim)' }}>caly<br />dzien</div>
         <div className="grid min-h-[22px] content-start gap-[3px]">
           {allDay.length ? allDay.map(e => (
-            <div key={`${e.id}:${e.date}`} className="rounded-[5px] border-l-[3px] px-[9px] py-1.5 text-[12.5px]"
-                 style={{ background: 'var(--surface)', borderLeftColor: `var(--w${e.weight + 1})` }}>{e.title}</div>
+            <button type="button" key={`${e.id}:${e.date}`} onClick={() => onEdit(e.id)}
+                    className="rounded-[5px] border-l-[3px] px-[9px] py-1.5 text-left text-[12.5px]"
+                    style={{ background: 'var(--surface)', borderLeftColor: `var(--w${e.weight + 1})`, color: 'var(--text)' }}>{e.title}</button>
           )) : <div className="pl-0.5 pt-1 text-xs" style={{ color: 'var(--dim)' }}>-</div>}
         </div>
       </div>
@@ -734,7 +775,7 @@ function DayView({ events, cursor, today, scroller }: {
           <HourGutter />
           <div className="relative border-l" style={{ borderColor: 'var(--line)' }}>
             <Lines />
-            {evs.filter(e => e.time).map(e => <Block key={`${e.id}:${e.date}`} e={e} wide />)}
+            {evs.filter(e => e.time).map(e => <Block key={`${e.id}:${e.date}`} e={e} wide onEdit={onEdit} />)}
             <NowLine show={isToday} />
           </div>
         </div>
