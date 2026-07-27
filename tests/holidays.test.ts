@@ -72,6 +72,8 @@ ok('DE Tag der Deutschen Einheit 2026', findDe('Tag der Deutschen Einheit') === 
 ok('DE Erster Weihnachtstag 2026', findDe('Erster Weihnachtstag') === '2026-12-25', findDe('Erster Weihnachtstag'));
 ok('DE Zweiter Weihnachtstag 2026', findDe('Zweiter Weihnachtstag') === '2026-12-26', findDe('Zweiter Weihnachtstag'));
 ok('DE zwykly wtorek nie wolny', !isDayOff('2026-07-28', 'DE'));
+ok('DE Heilige Drei Konige ma landy', holidaysFor(2026, ['koscielne'], 'DE').find(h => h.name === 'Heilige Drei Konige')?.regions?.join(',') === 'BW,BY,ST');
+ok('DE Fronleichnam ma landy', holidaysFor(2026, ['koscielne'], 'DE').find(h => h.name === 'Fronleichnam')?.regions?.includes('NW'));
 
 console.log(`\n${pass}/${pass+fails.length} testów przechodzi\n`);
 if(fails.length)console.log(fails.join('\n')+'\n');

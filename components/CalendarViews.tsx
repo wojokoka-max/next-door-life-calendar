@@ -132,6 +132,16 @@ function isHolidayCountry(value: string | undefined): value is HolidayCountry {
   return value === 'PL' || value === 'DE';
 }
 
+function holidayTitle(holidays: Holiday[]) {
+  return holidays.map(h => `${h.name}${h.regions?.length ? ` - ${h.regions.join(', ')}` : ''}`).join(', ');
+}
+
+function holidayShortName(holiday: Holiday, max = 18) {
+  const suffix = holiday.regions?.length ? ` ${holiday.regions.join('/')}` : '';
+  const clean = `${holiday.name.replace(/\s*\(regional\)/i, '').trim()}${suffix}`;
+  return clean.length <= max ? clean : `${clean.slice(0, max - 1)}...`;
+}
+
 function downloadTextFile(name: string, type: string, body: string) {
   const url = URL.createObjectURL(new Blob([body], { type }));
   const a = document.createElement('a');
@@ -767,7 +777,7 @@ function MonthView({ events, cursor, today, selected, holidayCountry, onPick, on
                 const out = d.getUTCMonth() !== cursor.getUTCMonth();
                 const isToday = today && +d === +today;
                 return (
-                  <button key={c} onClick={() => onPick(d)}
+                  <button key={c} onClick={() => onPick(d)} title={hols.length ? holidayTitle(hols) : undefined}
                           className="flex min-h-[54px] flex-col items-center gap-1 rounded-[9px] border px-1 pb-1 pt-[5px]"
                           style={{
                             background: out ? 'transparent' : +d === +selected ? 'var(--raised)' : hols.length ? 'var(--all-day-bg)' : 'var(--surface)',
@@ -788,6 +798,11 @@ function MonthView({ events, cursor, today, selected, holidayCountry, onPick, on
                       {hols.length > 0 && <i className="h-[5px] w-[5px] rounded-full" style={{ background: 'var(--accent)' }} />}
                     </span>
                     {evs.length > 4 && <span className="text-[9.5px] leading-none" style={{ color: 'var(--dim)' }}>+{evs.length - 4}</span>}
+                    {hols.length > 0 && (
+                      <span className="max-w-full truncate text-[8.5px] leading-none" style={{ color: 'var(--muted)' }}>
+                        {holidayShortName(hols[0], 12)}
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -852,7 +867,10 @@ function HolidayList({ holidays }: { holidays: Holiday[] }) {
               color: 'var(--text)',
             }}>
           <strong className="font-medium">{h.name}</strong>
-          <span style={{ color: 'var(--dim)' }}>{h.free ? ' - wolne' : ''}</span>
+          <span style={{ color: 'var(--dim)' }}>
+            {h.regions?.length ? ` - ${h.regions.join(', ')}` : ''}
+            {h.free ? ' - wolne' : ''}
+          </span>
         </li>
       ))}
     </ul>
@@ -907,7 +925,7 @@ function YearMonth({ events, year, month, today, holidayCountry, onMonth, onDay,
                 const out = d.getUTCMonth() !== month;
                 const isToday = today && +d === +today;
                 return (
-                  <button key={c} type="button" onClick={() => onDay(d)}
+                  <button key={c} type="button" onClick={() => onDay(d)} title={hols.length ? holidayTitle(hols) : undefined}
                           className="grid min-h-[24px] place-items-center rounded-[5px] text-[10.5px] tabular-nums"
                           style={{
                             background: evs.length && !out ? 'var(--raised)' : hols.length && !out ? 'var(--all-day-bg)' : 'transparent',
@@ -924,6 +942,11 @@ function YearMonth({ events, year, month, today, holidayCountry, onMonth, onDay,
                     } : undefined}>
                       {d.getUTCDate()}
                     </span>
+                    {hols.length > 0 && !out && (
+                      <span className="max-w-[28px] truncate text-[7.5px] leading-none" style={{ color: 'var(--muted)' }}>
+                        {holidayShortName(hols[0], 8)}
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -1078,7 +1101,8 @@ function WeekView({ events, cursor, today, holidayCountry, scroller, onEdit }: {
                        boxShadow: 'inset 0 0 0 1px var(--all-day-line)',
                        color: 'var(--text)',
                      }}>
-                  {h.name}
+                  {holidayShortName(h, 22)}
+                  {h.regions?.length ? ` - ${h.regions.join(', ')}` : ''}
                 </div>
               ))}
               {evs.filter(e => !e.time && +e.day === +d).map(e => (

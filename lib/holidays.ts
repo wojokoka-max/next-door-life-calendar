@@ -23,32 +23,36 @@ export interface Holiday {
   set: HolidaySet;
   /** dzień ustawowo wolny od pracy */
   free: boolean;
+  regions?: string[];
 }
 
-const MOVABLE_DE: Array<[offset: number, name: string, set: HolidaySet, free: boolean]> = [
+type FixedHolidayDef = [number, number, string, HolidaySet, boolean, string[]?];
+type MovableHolidayDef = [number, string, HolidaySet, boolean, string[]?];
+
+const MOVABLE_DE: MovableHolidayDef[] = [
   [ -2, 'Karfreitag',                  'urzedowe',   true ],
   [  0, 'Ostersonntag',                'koscielne',  false],
   [  1, 'Ostermontag',                 'urzedowe',   true ],
   [ 39, 'Christi Himmelfahrt',         'urzedowe',   true ],
   [ 49, 'Pfingstsonntag',              'koscielne',  false],
   [ 50, 'Pfingstmontag',               'urzedowe',   true ],
-  [ 60, 'Fronleichnam (regional)',     'koscielne',  true ],
+  [ 60, 'Fronleichnam',                'koscielne',  true, ['BW', 'BY', 'HE', 'NW', 'RP', 'SL', 'SN*', 'TH*'] ],
   [-52, 'Weiberfastnacht',             'zwyczajowe', false],
   [-48, 'Rosenmontag',                 'zwyczajowe', false],
   [-46, 'Aschermittwoch',              'koscielne',  false],
 ];
 
-const FIXED_DE: Array<[number, number, string, HolidaySet, boolean]> = [
+const FIXED_DE: FixedHolidayDef[] = [
   [ 1,  1, 'Neujahr',                                'urzedowe',   true ],
-  [ 1,  6, 'Heilige Drei Konige (regional)',         'koscielne',  true ],
+  [ 1,  6, 'Heilige Drei Konige',                    'koscielne',  true, ['BW', 'BY', 'ST'] ],
   [ 2, 14, 'Valentinstag',                           'zwyczajowe', false],
-  [ 3,  8, 'Internationaler Frauentag (regional)',   'zwyczajowe', true ],
+  [ 3,  8, 'Internationaler Frauentag',              'zwyczajowe', true, ['BE', 'MV'] ],
   [ 5,  1, 'Tag der Arbeit',                         'urzedowe',   true ],
-  [ 8, 15, 'Maria Himmelfahrt (regional)',           'koscielne',  true ],
-  [ 9, 20, 'Weltkindertag (regional)',               'zwyczajowe', true ],
+  [ 8, 15, 'Maria Himmelfahrt',                      'koscielne',  true, ['BY*', 'SL'] ],
+  [ 9, 20, 'Weltkindertag',                          'zwyczajowe', true, ['TH'] ],
   [10,  3, 'Tag der Deutschen Einheit',              'urzedowe',   true ],
-  [10, 31, 'Reformationstag (regional)',             'koscielne',  true ],
-  [11,  1, 'Allerheiligen (regional)',               'koscielne',  true ],
+  [10, 31, 'Reformationstag',                        'koscielne',  true, ['BB', 'HB', 'HH', 'MV', 'NI', 'SN', 'ST', 'SH', 'TH'] ],
+  [11,  1, 'Allerheiligen',                          'koscielne',  true, ['BW', 'BY', 'NW', 'RP', 'SL'] ],
   [11, 11, 'Martinstag',                             'zwyczajowe', false],
   [12,  6, 'Nikolaustag',                            'zwyczajowe', false],
   [12, 24, 'Heiligabend',                            'zwyczajowe', false],
@@ -165,11 +169,23 @@ export function holidaysFor(year: number, sets: HolidaySet[] = ALL_SETS, country
   const defs = defsFor(country);
   const out: Holiday[] = [];
 
-  for (const [m, d, name, set, free] of defs.fixed) {
-    if (sets.includes(set)) out.push({ date: iso(new Date(Date.UTC(year, m - 1, d))), name, set, free });
+  for (const [m, d, name, set, free, regions] of defs.fixed) {
+    if (sets.includes(set as HolidaySet)) out.push({
+      date: iso(new Date(Date.UTC(year, m - 1, d as number))),
+      name: name as string,
+      set: set as HolidaySet,
+      free: Boolean(free),
+      regions,
+    });
   }
-  for (const [off, name, set, free] of defs.movable) {
-    if (sets.includes(set)) out.push({ date: iso(shift(easter, off)), name, set, free });
+  for (const [off, name, set, free, regions] of defs.movable) {
+    if (sets.includes(set as HolidaySet)) out.push({
+      date: iso(shift(easter, off)),
+      name: name as string,
+      set: set as HolidaySet,
+      free: Boolean(free),
+      regions,
+    });
   }
 
   return out.sort((a, b) => a.date.localeCompare(b.date) || a.name.localeCompare(b.name));
