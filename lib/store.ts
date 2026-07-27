@@ -57,6 +57,7 @@ export interface EventRecord {
 export interface Settings {
   id: 'settings';
   theme: string;
+  holidayCountry?: 'PL' | 'DE';
   weekStart: 0 | 1;
   defaultReminder: number | null;
   lastBackupAt: string | null;
@@ -171,7 +172,7 @@ export const remove = (id: string) =>
 /* ------------------------------------------------------------------ */
 
 const DEFAULTS: Settings = {
-  id: 'settings', theme: 'granat', weekStart: 1,
+  id: 'settings', theme: 'granat', holidayCountry: 'PL', weekStart: 1,
   defaultReminder: 30, lastBackupAt: null,
 };
 

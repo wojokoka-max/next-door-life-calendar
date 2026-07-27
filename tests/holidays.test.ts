@@ -60,5 +60,18 @@ ok('3 maja 2026 wolny',        isDayOff('2026-05-03'));
 ok('zwykły wtorek nie wolny', !isDayOff('2026-07-28'));
 ok('niedziela zawsze wolna',   isDayOff('2026-07-26'));
 
+const de2026 = holidaysFor(2026, ['urzedowe'], 'DE');
+const findDe = (n:string) => de2026.find(h => h.name === n)?.date;
+ok('DE Neujahr 2026', findDe('Neujahr') === '2026-01-01', findDe('Neujahr'));
+ok('DE Karfreitag 2026', findDe('Karfreitag') === '2026-04-03', findDe('Karfreitag'));
+ok('DE Ostermontag 2026', findDe('Ostermontag') === '2026-04-06', findDe('Ostermontag'));
+ok('DE Tag der Arbeit 2026', findDe('Tag der Arbeit') === '2026-05-01', findDe('Tag der Arbeit'));
+ok('DE Christi Himmelfahrt 2026', findDe('Christi Himmelfahrt') === '2026-05-14', findDe('Christi Himmelfahrt'));
+ok('DE Pfingstmontag 2026', findDe('Pfingstmontag') === '2026-05-25', findDe('Pfingstmontag'));
+ok('DE Tag der Deutschen Einheit 2026', findDe('Tag der Deutschen Einheit') === '2026-10-03', findDe('Tag der Deutschen Einheit'));
+ok('DE Erster Weihnachtstag 2026', findDe('Erster Weihnachtstag') === '2026-12-25', findDe('Erster Weihnachtstag'));
+ok('DE Zweiter Weihnachtstag 2026', findDe('Zweiter Weihnachtstag') === '2026-12-26', findDe('Zweiter Weihnachtstag'));
+ok('DE zwykly wtorek nie wolny', !isDayOff('2026-07-28', 'DE'));
+
 console.log(`\n${pass}/${pass+fails.length} testów przechodzi\n`);
 if(fails.length)console.log(fails.join('\n')+'\n');

@@ -14,6 +14,7 @@
  */
 
 export type HolidaySet = 'urzedowe' | 'koscielne' | 'zwyczajowe' | 'pamieci';
+export type HolidayCountry = 'PL' | 'DE';
 
 export interface Holiday {
   /** "YYYY-MM-DD" */
@@ -23,6 +24,38 @@ export interface Holiday {
   /** dzień ustawowo wolny od pracy */
   free: boolean;
 }
+
+const MOVABLE_DE: Array<[offset: number, name: string, set: HolidaySet, free: boolean]> = [
+  [ -2, 'Karfreitag',                  'urzedowe',   true ],
+  [  0, 'Ostersonntag',                'koscielne',  false],
+  [  1, 'Ostermontag',                 'urzedowe',   true ],
+  [ 39, 'Christi Himmelfahrt',         'urzedowe',   true ],
+  [ 49, 'Pfingstsonntag',              'koscielne',  false],
+  [ 50, 'Pfingstmontag',               'urzedowe',   true ],
+  [ 60, 'Fronleichnam (regional)',     'koscielne',  true ],
+  [-52, 'Weiberfastnacht',             'zwyczajowe', false],
+  [-48, 'Rosenmontag',                 'zwyczajowe', false],
+  [-46, 'Aschermittwoch',              'koscielne',  false],
+];
+
+const FIXED_DE: Array<[number, number, string, HolidaySet, boolean]> = [
+  [ 1,  1, 'Neujahr',                                'urzedowe',   true ],
+  [ 1,  6, 'Heilige Drei Konige (regional)',         'koscielne',  true ],
+  [ 2, 14, 'Valentinstag',                           'zwyczajowe', false],
+  [ 3,  8, 'Internationaler Frauentag (regional)',   'zwyczajowe', true ],
+  [ 5,  1, 'Tag der Arbeit',                         'urzedowe',   true ],
+  [ 8, 15, 'Maria Himmelfahrt (regional)',           'koscielne',  true ],
+  [ 9, 20, 'Weltkindertag (regional)',               'zwyczajowe', true ],
+  [10,  3, 'Tag der Deutschen Einheit',              'urzedowe',   true ],
+  [10, 31, 'Reformationstag (regional)',             'koscielne',  true ],
+  [11,  1, 'Allerheiligen (regional)',               'koscielne',  true ],
+  [11, 11, 'Martinstag',                             'zwyczajowe', false],
+  [12,  6, 'Nikolaustag',                            'zwyczajowe', false],
+  [12, 24, 'Heiligabend',                            'zwyczajowe', false],
+  [12, 25, 'Erster Weihnachtstag',                   'urzedowe',   true ],
+  [12, 26, 'Zweiter Weihnachtstag',                  'urzedowe',   true ],
+  [12, 31, 'Silvester',                              'zwyczajowe', false],
+];
 
 /* ------------------------------------------------------------------ */
 /* Wielkanoc                                                           */
@@ -121,14 +154,21 @@ export const SET_LABEL: Record<HolidaySet, string> = {
 };
 
 /** Wszystkie święta danego roku, posortowane po dacie. */
-export function holidaysFor(year: number, sets: HolidaySet[] = ALL_SETS): Holiday[] {
+function defsFor(country: HolidayCountry) {
+  return country === 'DE'
+    ? { fixed: FIXED_DE, movable: MOVABLE_DE }
+    : { fixed: FIXED, movable: MOVABLE };
+}
+
+export function holidaysFor(year: number, sets: HolidaySet[] = ALL_SETS, country: HolidayCountry = 'PL'): Holiday[] {
   const easter = easterSunday(year);
+  const defs = defsFor(country);
   const out: Holiday[] = [];
 
-  for (const [m, d, name, set, free] of FIXED) {
+  for (const [m, d, name, set, free] of defs.fixed) {
     if (sets.includes(set)) out.push({ date: iso(new Date(Date.UTC(year, m - 1, d))), name, set, free });
   }
-  for (const [off, name, set, free] of MOVABLE) {
+  for (const [off, name, set, free] of defs.movable) {
     if (sets.includes(set)) out.push({ date: iso(shift(easter, off)), name, set, free });
   }
 
@@ -139,26 +179,26 @@ export function holidaysFor(year: number, sets: HolidaySet[] = ALL_SETS): Holida
  * Święta w zakresie dat — zakres bywa na przełomie roku, więc liczymy
  * dla obu lat i filtrujemy.
  */
-export function holidaysInRange(from: string, to: string, sets: HolidaySet[] = ALL_SETS): Holiday[] {
+export function holidaysInRange(from: string, to: string, sets: HolidaySet[] = ALL_SETS, country: HolidayCountry = 'PL'): Holiday[] {
   const y1 = Number(from.slice(0, 4));
   const y2 = Number(to.slice(0, 4));
   const out: Holiday[] = [];
-  for (let y = y1; y <= y2; y++) out.push(...holidaysFor(y, sets));
+  for (let y = y1; y <= y2; y++) out.push(...holidaysFor(y, sets, country));
   return out.filter(h => h.date >= from && h.date <= to);
 }
 
 /** Mapa data → święta, do szybkiego sprawdzania przy rysowaniu siatki. */
-export function holidayMap(from: string, to: string, sets: HolidaySet[] = ALL_SETS): Map<string, Holiday[]> {
+export function holidayMap(from: string, to: string, sets: HolidaySet[] = ALL_SETS, country: HolidayCountry = 'PL'): Map<string, Holiday[]> {
   const m = new Map<string, Holiday[]>();
-  for (const h of holidaysInRange(from, to, sets)) {
+  for (const h of holidaysInRange(from, to, sets, country)) {
     m.set(h.date, [...(m.get(h.date) ?? []), h]);
   }
   return m;
 }
 
 /** Czy dzień jest ustawowo wolny — wliczając niedziele. */
-export function isDayOff(date: string): boolean {
+export function isDayOff(date: string, country: HolidayCountry = 'PL'): boolean {
   const d = new Date(date + 'T00:00:00Z');
   if (d.getUTCDay() === 0) return true;
-  return holidaysFor(d.getUTCFullYear(), ['urzedowe']).some(h => h.date === date && h.free);
+  return holidaysFor(d.getUTCFullYear(), ['urzedowe', 'koscielne', 'zwyczajowe'], country).some(h => h.date === date && h.free);
 }

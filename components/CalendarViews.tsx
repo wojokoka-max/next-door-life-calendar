@@ -2,6 +2,7 @@
 
 import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { buildEventIcs, icsFileName } from '@/lib/ics';
+import { holidayMap, type Holiday, type HolidayCountry } from '@/lib/holidays';
 import { isoWeekOf } from '@/lib/iso-week';
 import {
   all as loadEvents,
@@ -127,6 +128,10 @@ function isTheme(value: string): value is ThemeName {
   return THEMES.some(t => t.id === value);
 }
 
+function isHolidayCountry(value: string | undefined): value is HolidayCountry {
+  return value === 'PL' || value === 'DE';
+}
+
 function downloadTextFile(name: string, type: string, body: string) {
   const url = URL.createObjectURL(new Blob([body], { type }));
   const a = document.createElement('a');
@@ -214,6 +219,7 @@ export default function CalendarViews() {
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [theme, setTheme] = useState<ThemeName>('granat');
+  const [holidayCountry, setHolidayCountry] = useState<HolidayCountry>('PL');
   const [notices, setNotices] = useState<ReminderNotice[]>([]);
   const fired = useRef(new Set<string>());
   const scroller = useRef<HTMLDivElement>(null);
@@ -233,8 +239,10 @@ export default function CalendarViews() {
       const [records, prefs] = await Promise.all([loadEvents(), loadSettings()]);
       if (cancelled) return;
       const nextTheme = isTheme(prefs.theme) ? prefs.theme : 'granat';
+      const nextHolidayCountry = isHolidayCountry(prefs.holidayCountry) ? prefs.holidayCountry : 'PL';
       setEvents(records);
       setTheme(nextTheme);
+      setHolidayCountry(nextHolidayCountry);
       document.documentElement.dataset.theme = nextTheme;
       setLoading(false);
     })();
@@ -313,6 +321,11 @@ export default function CalendarViews() {
     await saveSettings({ theme: next });
   };
 
+  const changeHolidayCountry = async (next: HolidayCountry) => {
+    setHolidayCountry(next);
+    await saveSettings({ holidayCountry: next });
+  };
+
   return (
     <main className="mx-auto max-w-[620px] px-[14px] pt-[18px] pb-12">
       <header className="mb-4 flex items-start gap-2">
@@ -346,6 +359,7 @@ export default function CalendarViews() {
       <ReminderPanel notices={notices} onClear={() => setNotices([])} />
 
       <ThemePicker theme={theme} onChange={changeTheme} />
+      <HolidayCountryPicker country={holidayCountry} onChange={changeHolidayCountry} />
 
       <nav className="mb-3.5 flex gap-1.5">
         {([['day', 'Dzien'], ['week', 'Tydzien'], ['month', 'Miesiac'], ['year', 'Rok']] as const).map(([v, t]) => (
@@ -364,18 +378,20 @@ export default function CalendarViews() {
 
       {view === 'month' && (
         <MonthView events={events} cursor={cursor} today={today} selected={selected}
+                   holidayCountry={holidayCountry}
                    onPick={d => { if (+d === +selected) { setCursor(d); setView('day'); } else setSelected(d); }}
                    onWeek={d => { setCursor(d); setView('week'); }}
                    onEdit={startEdit} />
       )}
       {view === 'year' && (
         <YearView events={events} cursor={cursor} today={today}
+                  holidayCountry={holidayCountry}
                   onMonth={d => { setCursor(d); setSelected(d); setView('month'); }}
                   onDay={d => { setCursor(d); setSelected(d); setView('day'); }}
                   onWeek={d => { setCursor(d); setView('week'); }} />
       )}
-      {view === 'week' && <WeekView events={events} cursor={cursor} today={today} scroller={scroller} onEdit={startEdit} />}
-      {view === 'day' && <DayView events={events} cursor={cursor} today={today} scroller={scroller} onEdit={startEdit} />}
+      {view === 'week' && <WeekView events={events} cursor={cursor} today={today} holidayCountry={holidayCountry} scroller={scroller} onEdit={startEdit} />}
+      {view === 'day' && <DayView events={events} cursor={cursor} today={today} holidayCountry={holidayCountry} scroller={scroller} onEdit={startEdit} />}
 
       <footer className="mt-6 text-xs leading-relaxed" style={{ color: 'var(--dim)' }}>
         Dane zapisuja sie lokalnie w tej przegladarce. Przypomnienia dzialaja, kiedy aplikacja jest otwarta;
@@ -418,6 +434,29 @@ function ThemePicker({ theme, onChange }: { theme: ThemeName; onChange: (theme: 
                 }}>
           <span className="h-3.5 w-3.5 rounded-full border" style={{ background: t.swatch, borderColor: 'rgba(128,128,128,.35)' }} />
           {t.label}
+        </button>
+      ))}
+    </section>
+  );
+}
+
+function HolidayCountryPicker({ country, onChange }: {
+  country: HolidayCountry;
+  onChange: (country: HolidayCountry) => void | Promise<void>;
+}) {
+  return (
+    <section className="mb-3 flex items-center gap-2 text-xs">
+      <span style={{ color: 'var(--muted)' }}>Swieta</span>
+      {([['PL', 'Polska'], ['DE', 'Niemcy']] as const).map(([id, label]) => (
+        <button key={id} type="button" onClick={() => onChange(id)} aria-pressed={country === id}
+                className="rounded-[8px] border px-2.5 py-1.5"
+                style={{
+                  background: country === id ? 'var(--raised)' : 'var(--surface)',
+                  borderColor: country === id ? 'var(--accent-line)' : 'var(--line)',
+                  color: country === id ? 'var(--text)' : 'var(--muted)',
+                  fontWeight: country === id ? 600 : 400,
+                }}>
+          {label}
         </button>
       ))}
     </section>
@@ -685,11 +724,12 @@ function EventDialog({ initialDate, event, onClose, onSaved }: {
   );
 }
 
-function MonthView({ events, cursor, today, selected, onPick, onWeek, onEdit }: {
+function MonthView({ events, cursor, today, selected, holidayCountry, onPick, onWeek, onEdit }: {
   events: EventRecord[];
   cursor: Date;
   today: Date | null;
   selected: Date;
+  holidayCountry: HolidayCountry;
   onPick: (d: Date) => void;
   onWeek: (d: Date) => void;
   onEdit: (id: string) => void;
@@ -697,11 +737,13 @@ function MonthView({ events, cursor, today, selected, onPick, onWeek, onEdit }: 
   const first = U(cursor.getUTCFullYear(), cursor.getUTCMonth(), 1);
   const grid = mondayOf(first);
   const map = new Map<string, Occurrence[]>();
+  const holidays = holidayMap(iso(grid), iso(addD(grid, 41)), undefined, holidayCountry);
   for (const o of occurrences(events, grid, addD(grid, 41))) {
     const k = iso(o.day);
     map.set(k, [...(map.get(k) ?? []), o]);
   }
   const dayEvents = occurrences(events, selected, selected);
+  const selectedHolidays = holidays.get(iso(selected)) ?? [];
 
   return (
     <>
@@ -721,13 +763,14 @@ function MonthView({ events, cursor, today, selected, onPick, onWeek, onEdit }: 
               {Array.from({ length: 7 }, (_, c) => {
                 const d = addD(rowStart, c);
                 const evs = map.get(iso(d)) ?? [];
+                const hols = holidays.get(iso(d)) ?? [];
                 const out = d.getUTCMonth() !== cursor.getUTCMonth();
                 const isToday = today && +d === +today;
                 return (
                   <button key={c} onClick={() => onPick(d)}
                           className="flex min-h-[54px] flex-col items-center gap-1 rounded-[9px] border px-1 pb-1 pt-[5px]"
                           style={{
-                            background: out ? 'transparent' : +d === +selected ? 'var(--raised)' : 'var(--surface)',
+                            background: out ? 'transparent' : +d === +selected ? 'var(--raised)' : hols.length ? 'var(--all-day-bg)' : 'var(--surface)',
                             borderColor: +d === +selected ? 'var(--accent-line)' : 'transparent',
                             opacity: out ? .45 : 1,
                           }}>
@@ -742,6 +785,7 @@ function MonthView({ events, cursor, today, selected, onPick, onWeek, onEdit }: 
                         <i key={`${e.id}:${e.date}`} className="h-[5px] w-[5px] rounded-full"
                            style={{ background: `var(--w${e.weight + 1})` }} />
                       ))}
+                      {hols.length > 0 && <i className="h-[5px] w-[5px] rounded-full" style={{ background: 'var(--accent)' }} />}
                     </span>
                     {evs.length > 4 && <span className="text-[9.5px] leading-none" style={{ color: 'var(--dim)' }}>+{evs.length - 4}</span>}
                   </button>
@@ -758,16 +802,18 @@ function MonthView({ events, cursor, today, selected, onPick, onWeek, onEdit }: 
           {DAY_LONG.format(selected)}
           <span className="font-mono normal-case tracking-normal" style={{ color: 'var(--dim)' }}>tydz. {wk(selected)}</span>
         </h2>
-        {dayEvents.length ? <AgendaList events={dayEvents} onEdit={onEdit} /> : <p className="m-0 text-sm" style={{ color: 'var(--dim)' }}>Nic zaplanowanego.</p>}
+        <HolidayList holidays={selectedHolidays} />
+        {dayEvents.length ? <AgendaList events={dayEvents} onEdit={onEdit} /> : !selectedHolidays.length && <p className="m-0 text-sm" style={{ color: 'var(--dim)' }}>Nic zaplanowanego.</p>}
       </section>
     </>
   );
 }
 
-function YearView({ events, cursor, today, onMonth, onDay, onWeek }: {
+function YearView({ events, cursor, today, holidayCountry, onMonth, onDay, onWeek }: {
   events: EventRecord[];
   cursor: Date;
   today: Date | null;
+  holidayCountry: HolidayCountry;
   onMonth: (d: Date) => void;
   onDay: (d: Date) => void;
   onWeek: (d: Date) => void;
@@ -782,6 +828,7 @@ function YearView({ events, cursor, today, onMonth, onDay, onWeek }: {
           year={year}
           month={month}
           today={today}
+          holidayCountry={holidayCountry}
           onMonth={onMonth}
           onDay={onDay}
           onWeek={onWeek}
@@ -791,11 +838,33 @@ function YearView({ events, cursor, today, onMonth, onDay, onWeek }: {
   );
 }
 
-function YearMonth({ events, year, month, today, onMonth, onDay, onWeek }: {
+function HolidayList({ holidays }: { holidays: Holiday[] }) {
+  if (!holidays.length) return null;
+  return (
+    <ul className="m-0 mb-2 grid list-none gap-[6px] p-0">
+      {holidays.map(h => (
+        <li key={`${h.date}:${h.name}`}
+            className="rounded-[8px] border-l-[3px] px-2.5 py-2 text-[12.5px]"
+            style={{
+              background: 'var(--all-day-bg)',
+              borderLeftColor: h.free ? 'var(--accent)' : 'var(--muted)',
+              boxShadow: 'inset 0 0 0 1px var(--all-day-line)',
+              color: 'var(--text)',
+            }}>
+          <strong className="font-medium">{h.name}</strong>
+          <span style={{ color: 'var(--dim)' }}>{h.free ? ' - wolne' : ''}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function YearMonth({ events, year, month, today, holidayCountry, onMonth, onDay, onWeek }: {
   events: EventRecord[];
   year: number;
   month: number;
   today: Date | null;
+  holidayCountry: HolidayCountry;
   onMonth: (d: Date) => void;
   onDay: (d: Date) => void;
   onWeek: (d: Date) => void;
@@ -803,6 +872,7 @@ function YearMonth({ events, year, month, today, onMonth, onDay, onWeek }: {
   const first = U(year, month, 1);
   const grid = mondayOf(first);
   const map = new Map<string, Occurrence[]>();
+  const holidays = holidayMap(iso(grid), iso(addD(grid, 41)), undefined, holidayCountry);
   for (const o of occurrences(events, grid, addD(grid, 41))) {
     const k = iso(o.day);
     map.set(k, [...(map.get(k) ?? []), o]);
@@ -833,13 +903,14 @@ function YearMonth({ events, year, month, today, onMonth, onDay, onWeek }: {
               {Array.from({ length: 7 }, (_, c) => {
                 const d = addD(rowStart, c);
                 const evs = map.get(iso(d)) ?? [];
+                const hols = holidays.get(iso(d)) ?? [];
                 const out = d.getUTCMonth() !== month;
                 const isToday = today && +d === +today;
                 return (
                   <button key={c} type="button" onClick={() => onDay(d)}
                           className="grid min-h-[24px] place-items-center rounded-[5px] text-[10.5px] tabular-nums"
                           style={{
-                            background: evs.length && !out ? 'var(--raised)' : 'transparent',
+                            background: evs.length && !out ? 'var(--raised)' : hols.length && !out ? 'var(--all-day-bg)' : 'transparent',
                             color: isToday ? 'var(--on-accent)' : out ? 'var(--dim)' : 'var(--text)',
                             opacity: out ? .42 : 1,
                           }}>
@@ -961,15 +1032,17 @@ function Block({ e, wide, onEdit }: { e: Occurrence; wide?: boolean; onEdit: (id
   );
 }
 
-function WeekView({ events, cursor, today, scroller, onEdit }: {
+function WeekView({ events, cursor, today, holidayCountry, scroller, onEdit }: {
   events: EventRecord[];
   cursor: Date;
   today: Date | null;
+  holidayCountry: HolidayCountry;
   scroller: React.RefObject<HTMLDivElement | null>;
   onEdit: (id: string) => void;
 }) {
   const mon = mondayOf(cursor);
   const evs = occurrences(events, mon, addD(mon, 6));
+  const holidays = holidayMap(iso(mon), iso(addD(mon, 6)), undefined, holidayCountry);
   const cols = 'repeat(7,1fr)';
   return (
     <>
@@ -992,8 +1065,22 @@ function WeekView({ events, cursor, today, scroller, onEdit }: {
         <div className="grid place-items-center text-center text-[9.5px]" style={{ color: 'var(--dim)' }}>caly<br />dzien</div>
         {Array.from({ length: 7 }, (_, i) => {
           const d = addD(mon, i);
+          const hols = holidays.get(iso(d)) ?? [];
           return (
             <div key={i} className="grid min-h-[20px] content-start gap-0.5">
+              {hols.map(h => (
+                <div key={`${h.date}:${h.name}`}
+                     className="truncate rounded-[3px] border-l-2 px-[3px] py-[2px] text-[9.5px]"
+                     title={h.name}
+                     style={{
+                       background: 'var(--all-day-bg)',
+                       borderLeftColor: h.free ? 'var(--accent)' : 'var(--muted)',
+                       boxShadow: 'inset 0 0 0 1px var(--all-day-line)',
+                       color: 'var(--text)',
+                     }}>
+                  {h.name}
+                </div>
+              ))}
               {evs.filter(e => !e.time && +e.day === +d).map(e => (
                 <button type="button" key={`${e.id}:${e.date}`} onClick={() => onEdit(e.id)}
                         className="truncate rounded-[3px] border-l-2 px-[3px] py-[2px] text-left text-[9.5px]"
@@ -1030,21 +1117,24 @@ function WeekView({ events, cursor, today, scroller, onEdit }: {
   );
 }
 
-function DayView({ events, cursor, today, scroller, onEdit }: {
+function DayView({ events, cursor, today, holidayCountry, scroller, onEdit }: {
   events: EventRecord[];
   cursor: Date;
   today: Date | null;
+  holidayCountry: HolidayCountry;
   scroller: React.RefObject<HTMLDivElement | null>;
   onEdit: (id: string) => void;
 }) {
   const evs = occurrences(events, cursor, cursor);
   const allDay = evs.filter(e => !e.time);
+  const holidays = holidayMap(iso(cursor), iso(cursor), undefined, holidayCountry).get(iso(cursor)) ?? [];
   const isToday = Boolean(today && +cursor === +today);
   return (
     <>
       <div className="mb-1.5 grid gap-0.5" style={{ gridTemplateColumns: '44px 1fr' }}>
         <div className="grid place-items-center text-center text-[9.5px]" style={{ color: 'var(--dim)' }}>caly<br />dzien</div>
         <div className="grid min-h-[22px] content-start gap-[3px]">
+          <HolidayList holidays={holidays} />
           {allDay.length ? allDay.map(e => (
             <button type="button" key={`${e.id}:${e.date}`} onClick={() => onEdit(e.id)}
                     className="rounded-[5px] border-l-[3px] px-[9px] py-1.5 text-left text-[12.5px]"
@@ -1054,7 +1144,7 @@ function DayView({ events, cursor, today, scroller, onEdit }: {
                       boxShadow: 'inset 0 0 0 1px var(--all-day-line)',
                       color: 'var(--text)',
                     }}>{e.title}</button>
-          )) : <div className="pl-0.5 pt-1 text-xs" style={{ color: 'var(--dim)' }}>-</div>}
+          )) : !holidays.length && <div className="pl-0.5 pt-1 text-xs" style={{ color: 'var(--dim)' }}>-</div>}
         </div>
       </div>
 
