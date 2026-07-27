@@ -13,6 +13,7 @@ import {
 
 type View = 'day' | 'week' | 'month';
 type Repeat = 'NONE' | 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY';
+type ReminderMode = 'panel' | 'system' | 'both';
 
 interface Occurrence {
   id: string;
@@ -23,6 +24,7 @@ interface Occurrence {
   durationMinutes: number | null;
   rrule: string | null;
   reminders: number[];
+  reminderMode: ReminderMode;
   weight: Weight;
 }
 
@@ -31,10 +33,14 @@ interface ReminderNotice {
   title: string;
   when: string;
   dueAt: number;
+  mode: ReminderMode;
 }
 
 const HOUR_PX = 46;
 const DOW = ['pon', 'wt', 'sr', 'czw', 'pt', 'sob', 'nd'];
+const HOURS = Array.from({ length: 24 }, (_, h) => String(h).padStart(2, '0'));
+const MINUTES = ['00', '05', '10', '15', '20', '25', '30', '35', '40', '45', '50', '55'];
+const REMINDER_TAG_PREFIX = 'reminder-mode:';
 const MONTH_YEAR = new Intl.DateTimeFormat('pl-PL', { month: 'long', year: 'numeric', timeZone: 'UTC' });
 const DAY_LONG = new Intl.DateTimeFormat('pl-PL', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
 const D_SHORT = new Intl.DateTimeFormat('pl-PL', { day: 'numeric', month: 'short', timeZone: 'UTC' });
@@ -90,6 +96,21 @@ function repeatFromRule(rrule: string | null): Repeat {
   return freq === 'DAILY' || freq === 'WEEKLY' || freq === 'MONTHLY' || freq === 'YEARLY' ? freq : 'NONE';
 }
 
+function reminderModeFromTags(tags: string[] = []): ReminderMode {
+  const tag = tags.find(t => t.startsWith(REMINDER_TAG_PREFIX));
+  const mode = tag?.slice(REMINDER_TAG_PREFIX.length);
+  return mode === 'panel' || mode === 'system' || mode === 'both' ? mode : 'both';
+}
+
+function tagsWithReminderMode(tags: string[] = [], mode: ReminderMode) {
+  return [...tags.filter(t => !t.startsWith(REMINDER_TAG_PREFIX)), `${REMINDER_TAG_PREFIX}${mode}`];
+}
+
+function splitTime(value: string | null) {
+  const [hour = '09', minute = '00'] = (value ?? '09:00').split(':');
+  return { hour: hour.padStart(2, '0'), minute: minute.padStart(2, '0') };
+}
+
 function occurrenceFromRecord(e: EventRecord, day: Date): Occurrence {
   return {
     id: e.id,
@@ -100,6 +121,7 @@ function occurrenceFromRecord(e: EventRecord, day: Date): Occurrence {
     durationMinutes: e.durationMinutes,
     rrule: e.rrule,
     reminders: e.reminders,
+    reminderMode: reminderModeFromTags(e.tags),
     weight: e.weight,
   };
 }
@@ -147,6 +169,7 @@ function reminderScan(records: EventRecord[], now = new Date()): ReminderNotice[
           title: o.title,
           when: `${o.date} ${o.time}`,
           dueAt,
+          mode: o.reminderMode,
         });
       }
     }
@@ -183,10 +206,11 @@ export default function CalendarViews() {
     const tick = () => {
       const due = reminderScan(events).filter(n => !fired.current.has(n.key));
       if (!due.length) return;
-      setNotices(prev => [...due, ...prev].slice(0, 5));
+      const panelDue = due.filter(n => n.mode !== 'system');
+      if (panelDue.length) setNotices(prev => [...panelDue, ...prev].slice(0, 5));
       for (const n of due) {
         fired.current.add(n.key);
-        if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        if (n.mode !== 'panel' && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
           new Notification('Przypomnienie', { body: `${n.title} - ${n.when}` });
         }
       }
@@ -373,10 +397,13 @@ function EventDialog({ initialDate, event, onClose, onSaved }: {
   const [title, setTitle] = useState(event?.title ?? '');
   const [date, setDate] = useState(event?.date ?? initialDate);
   const [allDay, setAllDay] = useState(event ? event.time === null : false);
-  const [time, setTime] = useState(event?.time ?? '09:00');
+  const initialTime = splitTime(event?.time ?? null);
+  const [hour, setHour] = useState(initialTime.hour);
+  const [minute, setMinute] = useState(initialTime.minute);
   const [duration, setDuration] = useState(event?.durationMinutes ?? 60);
   const [repeat, setRepeat] = useState<Repeat>(repeatFromRule(event?.rrule ?? null));
-  const [reminder, setReminder] = useState(event ? String(event.reminders[0] ?? 'none') : '30');
+  const [reminderWhen, setReminderWhen] = useState(event ? String(event.reminders[0] ?? 'none') : '30');
+  const [reminderMode, setReminderMode] = useState<ReminderMode>(reminderModeFromTags(event?.tags ?? []));
   const [weight, setWeight] = useState<Weight>(event?.weight ?? 1);
   const [saving, setSaving] = useState(false);
   const isEditing = Boolean(event);
@@ -387,9 +414,12 @@ function EventDialog({ initialDate, event, onClose, onSaved }: {
     const cleanTitle = String(data.get('title') ?? '').trim();
     const formDate = String(data.get('date') ?? initialDate);
     const formAllDay = data.has('allDay');
-    const formTime = String(data.get('time') ?? '09:00');
+    const formHour = String(data.get('hour') ?? '09').padStart(2, '0');
+    const formMinute = String(data.get('minute') ?? '00').padStart(2, '0');
+    const formTime = `${formHour}:${formMinute}`;
     const formDuration = Number(data.get('duration') ?? 60);
-    const formReminder = String(data.get('reminder') ?? 'none');
+    const formReminderWhen = String(data.get('reminderWhen') ?? 'none');
+    const formReminderMode = String(data.get('reminderMode') ?? 'both') as ReminderMode;
     const formRepeat = String(data.get('repeat') ?? 'NONE') as Repeat;
     const formWeight = Number(data.get('weight') ?? 1) as Weight;
     if (!cleanTitle) return;
@@ -402,9 +432,9 @@ function EventDialog({ initialDate, event, onClose, onSaved }: {
       durationMinutes: formAllDay ? null : formDuration,
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       rrule: formRepeat === 'NONE' ? null : `FREQ=${formRepeat}`,
-      reminders: formReminder === 'none' || formAllDay ? [] : [Number(formReminder)],
+      reminders: formReminderWhen === 'none' || formAllDay ? [] : [Number(formReminderWhen)],
       weight: formWeight,
-      tags: event?.tags ?? [],
+      tags: tagsWithReminderMode(event?.tags ?? [], formReminderMode),
     };
     if (event) {
       await put({ ...event, ...input });
@@ -441,12 +471,24 @@ function EventDialog({ initialDate, event, onClose, onSaved }: {
                    className="mt-1 w-full rounded-[8px] border px-3 py-2"
                    style={{ background: 'var(--surface)', borderColor: 'var(--line)', color: 'var(--text)' }} />
           </label>
-          <label className="block text-sm">
+          <fieldset className="m-0 block border-0 p-0 text-sm">
             Godzina
-            <input name="time" type="time" value={time} disabled={allDay} onChange={e => setTime(e.target.value)}
-                   className="mt-1 w-full rounded-[8px] border px-3 py-2 disabled:opacity-40"
-                   style={{ background: 'var(--surface)', borderColor: 'var(--line)', color: 'var(--text)' }} />
-          </label>
+            <div className="mt-1 grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+              <select name="hour" value={hour} disabled={allDay} onChange={e => setHour(e.target.value)}
+                      aria-label="Godzina"
+                      className="w-full rounded-[8px] border px-3 py-2 text-center font-mono disabled:opacity-40"
+                      style={{ background: 'var(--surface)', borderColor: 'var(--line)', color: 'var(--text)' }}>
+                {HOURS.map(h => <option key={h} value={h}>{h}</option>)}
+              </select>
+              <span className="font-mono text-base" style={{ color: 'var(--dim)' }}>:</span>
+              <select name="minute" value={minute} disabled={allDay} onChange={e => setMinute(e.target.value)}
+                      aria-label="Minuty"
+                      className="w-full rounded-[8px] border px-3 py-2 text-center font-mono disabled:opacity-40"
+                      style={{ background: 'var(--surface)', borderColor: 'var(--line)', color: 'var(--text)' }}>
+                {MINUTES.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
+          </fieldset>
           <label className="block text-sm">
             Czas trwania
             <select name="duration" value={duration} disabled={allDay} onChange={e => setDuration(Number(e.target.value))}
@@ -460,8 +502,8 @@ function EventDialog({ initialDate, event, onClose, onSaved }: {
             </select>
           </label>
           <label className="block text-sm">
-            Przypomnienie
-            <select name="reminder" value={reminder} disabled={allDay} onChange={e => setReminder(e.target.value)}
+            Kiedy przypomniec
+            <select name="reminderWhen" value={reminderWhen} disabled={allDay} onChange={e => setReminderWhen(e.target.value)}
                     className="mt-1 w-full rounded-[8px] border px-3 py-2 disabled:opacity-40"
                     style={{ background: 'var(--surface)', borderColor: 'var(--line)', color: 'var(--text)' }}>
               <option value="none">Bez przypomnienia</option>
@@ -471,6 +513,17 @@ function EventDialog({ initialDate, event, onClose, onSaved }: {
               <option value="30">30 min przed</option>
               <option value="60">1 godz. przed</option>
               <option value="1440">Dzien przed</option>
+            </select>
+          </label>
+          <label className="block text-sm">
+            Rodzaj przypomnienia
+            <select name="reminderMode" value={reminderMode} disabled={allDay || reminderWhen === 'none'}
+                    onChange={e => setReminderMode(e.target.value as ReminderMode)}
+                    className="mt-1 w-full rounded-[8px] border px-3 py-2 disabled:opacity-40"
+                    style={{ background: 'var(--surface)', borderColor: 'var(--line)', color: 'var(--text)' }}>
+              <option value="both">W aplikacji i systemowe</option>
+              <option value="panel">Tylko w aplikacji</option>
+              <option value="system">Tylko powiadomienie</option>
             </select>
           </label>
           <label className="block text-sm">
