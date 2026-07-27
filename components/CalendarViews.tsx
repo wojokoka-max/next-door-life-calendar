@@ -1,6 +1,7 @@
 'use client';
 
 import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { buildEventIcs, icsFileName } from '@/lib/ics';
 import { isoWeekOf } from '@/lib/iso-week';
 import {
   all as loadEvents,
@@ -124,6 +125,17 @@ function splitTime(value: string | null) {
 
 function isTheme(value: string): value is ThemeName {
   return THEMES.some(t => t.id === value);
+}
+
+function downloadTextFile(name: string, type: string, body: string) {
+  const url = URL.createObjectURL(new Blob([body], { type }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 function occurrenceFromRecord(e: EventRecord, day: Date): Occurrence {
@@ -474,6 +486,42 @@ function EventDialog({ initialDate, event, onClose, onSaved }: {
   const [saving, setSaving] = useState(false);
   const isEditing = Boolean(event);
 
+  const draftRecord = (): EventRecord | null => {
+    const cleanTitle = title.trim();
+    if (!cleanTitle) return null;
+    const hasReminder = reminderWhen !== 'none' && !allDay;
+    const now = new Date().toISOString();
+    return {
+      ...(event ?? {
+        id: typeof crypto?.randomUUID === 'function' ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
+        createdAt: now,
+        updatedAt: now,
+        skipped: [],
+        seriesId: null,
+        completedAt: null,
+        pinnedAt: null,
+        archivedAt: null,
+        deletedAt: null,
+      }),
+      title: cleanTitle,
+      notes: event?.notes ?? null,
+      date,
+      time: allDay ? null : `${hour}:${minute}`,
+      durationMinutes: allDay ? null : duration,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      rrule: repeat === 'NONE' ? null : `FREQ=${repeat}`,
+      reminders: hasReminder ? [Number(reminderWhen)] : [],
+      weight,
+      tags: tagsWithReminderMode(event?.tags ?? [], reminderMode),
+    };
+  };
+
+  const downloadIcs = () => {
+    const draft = draftRecord();
+    if (!draft) return;
+    downloadTextFile(icsFileName(draft), 'text/calendar;charset=utf-8', buildEventIcs(draft));
+  };
+
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     const data = new FormData(e.currentTarget as HTMLFormElement);
@@ -625,6 +673,12 @@ function EventDialog({ initialDate, event, onClose, onSaved }: {
                 className="mt-4 w-full rounded-[10px] px-4 py-3 font-semibold disabled:opacity-40"
                 style={{ background: 'var(--accent)', color: 'var(--on-accent)' }}>
           {saving ? 'Zapisywanie...' : isEditing ? 'Zapisz zmiany' : 'Zapisz'}
+        </button>
+
+        <button type="button" onClick={downloadIcs} disabled={!title.trim()}
+                className="mt-2 w-full rounded-[10px] border px-4 py-2.5 text-sm font-semibold disabled:opacity-40"
+                style={{ background: 'var(--surface)', borderColor: 'var(--line)', color: 'var(--text)' }}>
+          Pobierz do kalendarza (.ics)
         </button>
       </form>
     </div>
