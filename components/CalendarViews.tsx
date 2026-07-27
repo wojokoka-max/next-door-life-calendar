@@ -13,7 +13,7 @@ import {
   type Weight,
 } from '@/lib/store';
 
-type View = 'day' | 'week' | 'month';
+type View = 'day' | 'week' | 'month' | 'year';
 type Repeat = 'NONE' | 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY';
 type ReminderMode = 'panel' | 'system' | 'both';
 type ThemeName = 'granat' | 'lazur' | 'atrament' | 'porcelana' | 'nokturn' | 'petrol';
@@ -250,7 +250,7 @@ export default function CalendarViews() {
   }, [events]);
 
   useEffect(() => {
-    if (view === 'month' || !scroller.current) return;
+    if (view === 'month' || view === 'year' || !scroller.current) return;
     const from = view === 'day' ? cursor : mondayOf(cursor);
     const timed = occurrences(events, from, view === 'day' ? cursor : addD(from, 6)).filter(e => e.time);
     const min = timed.length
@@ -273,12 +273,15 @@ export default function CalendarViews() {
       const [mo, yr] = MONTH_YEAR.format(cursor).split(' ');
       return { main: mo, sub: yr };
     }
+    if (view === 'year') {
+      return { main: String(cursor.getUTCFullYear()), sub: 'widok roku z numerami tygodni' };
+    }
     const mon = mondayOf(cursor);
     return { main: `Tydzien ${wk(mon)}`, sub: `${D_SHORT.format(mon)} - ${D_FULL.format(addD(mon, 6))}` };
   }, [view, cursor]);
 
   const step = (n: number) =>
-    setCursor(c => view === 'month' ? addM(c, n) : addD(c, view === 'week' ? 7 * n : n));
+    setCursor(c => view === 'year' ? addM(c, 12 * n) : view === 'month' ? addM(c, n) : addD(c, view === 'week' ? 7 * n : n));
 
   const startAdd = () => {
     setEditingId(null);
@@ -333,7 +336,7 @@ export default function CalendarViews() {
       <ThemePicker theme={theme} onChange={changeTheme} />
 
       <nav className="mb-3.5 flex gap-1.5">
-        {([['day', 'Dzien'], ['week', 'Tydzien'], ['month', 'Miesiac']] as const).map(([v, t]) => (
+        {([['day', 'Dzien'], ['week', 'Tydzien'], ['month', 'Miesiac'], ['year', 'Rok']] as const).map(([v, t]) => (
           <button key={v} onClick={() => setView(v)} aria-pressed={view === v}
                   className="flex-1 rounded-[10px] border py-2.5 text-sm"
                   style={{
@@ -352,6 +355,12 @@ export default function CalendarViews() {
                    onPick={d => { if (+d === +selected) { setCursor(d); setView('day'); } else setSelected(d); }}
                    onWeek={d => { setCursor(d); setView('week'); }}
                    onEdit={startEdit} />
+      )}
+      {view === 'year' && (
+        <YearView events={events} cursor={cursor} today={today}
+                  onMonth={d => { setCursor(d); setSelected(d); setView('month'); }}
+                  onDay={d => { setCursor(d); setSelected(d); setView('day'); }}
+                  onWeek={d => { setCursor(d); setView('week'); }} />
       )}
       {view === 'week' && <WeekView events={events} cursor={cursor} today={today} scroller={scroller} onEdit={startEdit} />}
       {view === 'day' && <DayView events={events} cursor={cursor} today={today} scroller={scroller} onEdit={startEdit} />}
@@ -698,6 +707,106 @@ function MonthView({ events, cursor, today, selected, onPick, onWeek, onEdit }: 
         {dayEvents.length ? <AgendaList events={dayEvents} onEdit={onEdit} /> : <p className="m-0 text-sm" style={{ color: 'var(--dim)' }}>Nic zaplanowanego.</p>}
       </section>
     </>
+  );
+}
+
+function YearView({ events, cursor, today, onMonth, onDay, onWeek }: {
+  events: EventRecord[];
+  cursor: Date;
+  today: Date | null;
+  onMonth: (d: Date) => void;
+  onDay: (d: Date) => void;
+  onWeek: (d: Date) => void;
+}) {
+  const year = cursor.getUTCFullYear();
+  return (
+    <div className="grid gap-4 sm:grid-cols-2">
+      {Array.from({ length: 12 }, (_, month) => (
+        <YearMonth
+          key={month}
+          events={events}
+          year={year}
+          month={month}
+          today={today}
+          onMonth={onMonth}
+          onDay={onDay}
+          onWeek={onWeek}
+        />
+      ))}
+    </div>
+  );
+}
+
+function YearMonth({ events, year, month, today, onMonth, onDay, onWeek }: {
+  events: EventRecord[];
+  year: number;
+  month: number;
+  today: Date | null;
+  onMonth: (d: Date) => void;
+  onDay: (d: Date) => void;
+  onWeek: (d: Date) => void;
+}) {
+  const first = U(year, month, 1);
+  const grid = mondayOf(first);
+  const map = new Map<string, Occurrence[]>();
+  for (const o of occurrences(events, grid, addD(grid, 41))) {
+    const k = iso(o.day);
+    map.set(k, [...(map.get(k) ?? []), o]);
+  }
+  const label = new Intl.DateTimeFormat('pl-PL', { month: 'long', timeZone: 'UTC' }).format(first);
+
+  return (
+    <section>
+      <button type="button" onClick={() => onMonth(first)}
+              className="mb-1.5 w-full rounded-[8px] border px-2 py-1.5 text-left text-[12px] font-semibold capitalize"
+              style={{ background: 'var(--surface)', borderColor: 'var(--line)', color: 'var(--text)' }}>
+        {label}
+      </button>
+      <div className="grid gap-0.5" style={{ gridTemplateColumns: '24px repeat(7,1fr)' }}>
+        <div className="text-center font-mono text-[8.5px]" style={{ color: 'var(--dim)' }}>tydz.</div>
+        {DOW.map(d => (
+          <div key={d} className="pb-1 text-center text-[8.5px] font-semibold uppercase" style={{ color: 'var(--muted)' }}>{d}</div>
+        ))}
+        {Array.from({ length: 6 }, (_, r) => {
+          const rowStart = addD(grid, r * 7);
+          return (
+            <div key={r} className="contents">
+              <button type="button" onClick={() => onWeek(rowStart)} title={`Tydzien ${wk(rowStart)}`}
+                      className="grid min-h-[24px] place-items-center rounded-[5px] font-mono text-[9px]"
+                      style={{ color: 'var(--dim)' }}>
+                {wk(rowStart)}
+              </button>
+              {Array.from({ length: 7 }, (_, c) => {
+                const d = addD(rowStart, c);
+                const evs = map.get(iso(d)) ?? [];
+                const out = d.getUTCMonth() !== month;
+                const isToday = today && +d === +today;
+                return (
+                  <button key={c} type="button" onClick={() => onDay(d)}
+                          className="grid min-h-[24px] place-items-center rounded-[5px] text-[10.5px] tabular-nums"
+                          style={{
+                            background: evs.length && !out ? 'var(--raised)' : 'transparent',
+                            color: isToday ? 'var(--on-accent)' : out ? 'var(--dim)' : 'var(--text)',
+                            opacity: out ? .42 : 1,
+                          }}>
+                    <span style={isToday ? {
+                      background: 'var(--accent)',
+                      borderRadius: '999px',
+                      display: 'grid',
+                      height: 20,
+                      placeItems: 'center',
+                      width: 20,
+                    } : undefined}>
+                      {d.getUTCDate()}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
