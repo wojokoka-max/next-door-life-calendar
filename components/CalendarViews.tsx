@@ -7,6 +7,8 @@ import {
   create,
   put,
   purgeOldTrash,
+  saveSettings,
+  settings as loadSettings,
   type EventRecord,
   type Weight,
 } from '@/lib/store';
@@ -14,6 +16,7 @@ import {
 type View = 'day' | 'week' | 'month';
 type Repeat = 'NONE' | 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY';
 type ReminderMode = 'panel' | 'system' | 'both';
+type ThemeName = 'granat' | 'lazur' | 'atrament' | 'porcelana' | 'nokturn' | 'petrol';
 
 interface Occurrence {
   id: string;
@@ -41,6 +44,14 @@ const DOW = ['pon', 'wt', 'sr', 'czw', 'pt', 'sob', 'nd'];
 const HOURS = Array.from({ length: 24 }, (_, h) => String(h).padStart(2, '0'));
 const MINUTES = ['00', '05', '10', '15', '20', '25', '30', '35', '40', '45', '50', '55'];
 const REMINDER_TAG_PREFIX = 'reminder-mode:';
+const THEMES: { id: ThemeName; label: string; swatch: string }[] = [
+  { id: 'granat', label: 'Granat', swatch: '#8FB8D9' },
+  { id: 'lazur', label: 'Lazur', swatch: '#2C5D8F' },
+  { id: 'atrament', label: 'Atrament', swatch: '#C7A868' },
+  { id: 'porcelana', label: 'Porcelana', swatch: '#1F5B63' },
+  { id: 'nokturn', label: 'Nokturn', swatch: '#B7A2CE' },
+  { id: 'petrol', label: 'Petrol', swatch: '#E3A24A' },
+];
 const MONTH_YEAR = new Intl.DateTimeFormat('pl-PL', { month: 'long', year: 'numeric', timeZone: 'UTC' });
 const DAY_LONG = new Intl.DateTimeFormat('pl-PL', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
 const D_SHORT = new Intl.DateTimeFormat('pl-PL', { day: 'numeric', month: 'short', timeZone: 'UTC' });
@@ -109,6 +120,10 @@ function tagsWithReminderMode(tags: string[] = [], mode: ReminderMode) {
 function splitTime(value: string | null) {
   const [hour = '09', minute = '00'] = (value ?? '09:00').split(':');
   return { hour: hour.padStart(2, '0'), minute: minute.padStart(2, '0') };
+}
+
+function isTheme(value: string): value is ThemeName {
+  return THEMES.some(t => t.id === value);
 }
 
 function occurrenceFromRecord(e: EventRecord, day: Date): Occurrence {
@@ -186,6 +201,7 @@ export default function CalendarViews() {
   const [loading, setLoading] = useState(true);
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [theme, setTheme] = useState<ThemeName>('granat');
   const [notices, setNotices] = useState<ReminderNotice[]>([]);
   const fired = useRef(new Set<string>());
   const scroller = useRef<HTMLDivElement>(null);
@@ -199,7 +215,20 @@ export default function CalendarViews() {
     setToday(t);
     setCursor(t);
     setSelected(t);
-    purgeOldTrash().finally(() => refresh().finally(() => setLoading(false)));
+    let cancelled = false;
+    (async () => {
+      await purgeOldTrash();
+      const [records, prefs] = await Promise.all([loadEvents(), loadSettings()]);
+      if (cancelled) return;
+      const nextTheme = isTheme(prefs.theme) ? prefs.theme : 'granat';
+      setEvents(records);
+      setTheme(nextTheme);
+      document.documentElement.dataset.theme = nextTheme;
+      setLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -263,6 +292,12 @@ export default function CalendarViews() {
 
   const editingEvent = editingId ? events.find(e => e.id === editingId) ?? null : null;
 
+  const changeTheme = async (next: ThemeName) => {
+    setTheme(next);
+    document.documentElement.dataset.theme = next;
+    await saveSettings({ theme: next });
+  };
+
   return (
     <main className="mx-auto max-w-[620px] px-[14px] pt-[18px] pb-12">
       <header className="mb-4 flex items-start gap-2">
@@ -294,6 +329,8 @@ export default function CalendarViews() {
       </header>
 
       <ReminderPanel notices={notices} onClear={() => setNotices([])} />
+
+      <ThemePicker theme={theme} onChange={changeTheme} />
 
       <nav className="mb-3.5 flex gap-1.5">
         {([['day', 'Dzien'], ['week', 'Tydzien'], ['month', 'Miesiac']] as const).map(([v, t]) => (
@@ -343,6 +380,26 @@ export default function CalendarViews() {
         />
       )}
     </main>
+  );
+}
+
+function ThemePicker({ theme, onChange }: { theme: ThemeName; onChange: (theme: ThemeName) => void | Promise<void> }) {
+  return (
+    <section className="mb-3 flex flex-wrap gap-1.5">
+      {THEMES.map(t => (
+        <button key={t.id} type="button" onClick={() => onChange(t.id)} aria-pressed={theme === t.id}
+                className="flex h-8 items-center gap-1.5 rounded-[8px] border px-2 text-[12px]"
+                style={{
+                  background: theme === t.id ? 'var(--raised)' : 'var(--surface)',
+                  borderColor: theme === t.id ? 'var(--accent-line)' : 'var(--line)',
+                  color: theme === t.id ? 'var(--text)' : 'var(--muted)',
+                  fontWeight: theme === t.id ? 600 : 400,
+                }}>
+          <span className="h-3.5 w-3.5 rounded-full border" style={{ background: t.swatch, borderColor: 'rgba(128,128,128,.35)' }} />
+          {t.label}
+        </button>
+      ))}
+    </section>
   );
 }
 

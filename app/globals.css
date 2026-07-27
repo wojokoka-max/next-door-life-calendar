@@ -39,6 +39,13 @@
   --all-day-bg:rgba(183,162,206,.17); --all-day-line:rgba(183,162,206,.34);
   --on-accent:#1A1622; --w1:#847C93; --w2:#9C8FA8; --w3:#B7A2CE;
 }
+[data-theme="petrol"]{
+  --bg:#0F2E35; --surface:#143A43; --raised:#1B4750;
+  --text:#E6F0EC; --muted:#6F9089; --dim:rgba(230,240,236,.46);
+  --line:rgba(111,144,137,.24); --accent:#E3A24A; --accent-line:rgba(227,162,74,.45);
+  --all-day-bg:rgba(227,162,74,.18); --all-day-line:rgba(227,162,74,.36);
+  --on-accent:#14262B; --w1:#6F9089; --w2:#C9B458; --w3:#E3A24A;
+}
 
 html,body{background:var(--bg);color:var(--text)}
 body{
