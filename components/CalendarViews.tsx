@@ -3,7 +3,7 @@
 import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { buildEventIcs, icsFileName } from '@/lib/ics';
 import { holidayMap, type Holiday, type HolidayCountry } from '@/lib/holidays';
-import { isoWeekOf } from '@/lib/iso-week';
+import { isoWeekLabel, isoWeekOf, isoWeekRange, weeksInIsoYear } from '@/lib/iso-week';
 import {
   all as loadEvents,
   create,
@@ -86,6 +86,11 @@ const civil = (s: string) => {
 const isoDow = (d: Date) => (d.getUTCDay() + 6) % 7;
 const mondayOf = (d: Date) => addD(d, -isoDow(d));
 const wk = (d: Date) => isoWeekOf(d).week;
+const monthValue = (d: Date) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+const clampDay = (year: number, month: number, day: number) => {
+  const last = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  return U(year, month, Math.min(day, last));
+};
 
 function startDateTime(o: Occurrence): Date | null {
   if (!o.time) return null;
@@ -219,6 +224,75 @@ function reminderScan(records: EventRecord[], now = new Date()): ReminderNotice[
   return notices.sort((a, b) => b.dueAt - a.dueAt).slice(0, 5);
 }
 
+function RangePicker({ view, cursor, onDate, onWeek, onMonth, onYear }: {
+  view: View;
+  cursor: Date;
+  onDate: (value: string) => void;
+  onWeek: (value: string) => void;
+  onMonth: (value: string) => void;
+  onYear: (value: string) => void;
+}) {
+  const baseClass = 'h-9 min-w-0 rounded-[10px] border px-3 text-center text-[13px] font-medium outline-none';
+  const style = {
+    background: 'var(--surface)',
+    borderColor: 'var(--line)',
+    color: 'var(--text)',
+  };
+
+  if (view === 'week') {
+    return (
+      <input
+        type="week"
+        aria-label="Wybierz tydzien"
+        value={isoWeekLabel(isoWeekOf(cursor))}
+        onChange={e => onWeek(e.currentTarget.value)}
+        className={baseClass}
+        style={style}
+      />
+    );
+  }
+
+  if (view === 'month') {
+    return (
+      <input
+        type="month"
+        aria-label="Wybierz miesiac"
+        value={monthValue(cursor)}
+        onChange={e => onMonth(e.currentTarget.value)}
+        className={baseClass}
+        style={style}
+      />
+    );
+  }
+
+  if (view === 'year') {
+    return (
+      <input
+        type="number"
+        aria-label="Wybierz rok"
+        min={1900}
+        max={2200}
+        step={1}
+        value={cursor.getUTCFullYear()}
+        onChange={e => onYear(e.currentTarget.value)}
+        className={baseClass}
+        style={style}
+      />
+    );
+  }
+
+  return (
+    <input
+      type="date"
+      aria-label="Wybierz dzien"
+      value={iso(cursor)}
+      onChange={e => onDate(e.currentTarget.value)}
+      className={baseClass}
+      style={style}
+    />
+  );
+}
+
 export default function CalendarViews() {
   const [today, setToday] = useState<Date | null>(null);
   const [view, setView] = useState<View>('month');
@@ -310,8 +384,57 @@ export default function CalendarViews() {
     return { main: `Tydzien ${wk(mon)}`, sub: `${D_SHORT.format(mon)} - ${D_FULL.format(addD(mon, 6))}` };
   }, [view, cursor]);
 
-  const step = (n: number) =>
-    setCursor(c => view === 'year' ? addM(c, 12 * n) : view === 'month' ? addM(c, n) : addD(c, view === 'week' ? 7 * n : n));
+  const jumpTo = (date: Date, nextView = view) => {
+    setCursor(date);
+    setSelected(date);
+    setView(nextView);
+  };
+
+  const step = (n: number) => {
+    setCursor(c => {
+      const next = view === 'year' ? addM(c, 12 * n) : view === 'month' ? addM(c, n) : addD(c, view === 'week' ? 7 * n : n);
+      setSelected(next);
+      return next;
+    });
+  };
+
+  const changeView = (nextView: View) => {
+    const anchor = view === 'month' ? selected : cursor;
+    jumpTo(anchor, nextView);
+  };
+
+  const goToday = () => {
+    if (!today) return;
+    jumpTo(today);
+  };
+
+  const pickDate = (value: string) => {
+    if (!value) return;
+    jumpTo(civil(value));
+  };
+
+  const pickWeek = (value: string) => {
+    const match = /^(\d{4})-W(\d{2})$/.exec(value);
+    if (!match) return;
+    const year = Number(match[1]);
+    const week = Number(match[2]);
+    if (week < 1 || week > weeksInIsoYear(year)) return;
+    jumpTo(civil(isoWeekRange(year, week).start), 'week');
+  };
+
+  const pickMonth = (value: string) => {
+    const match = /^(\d{4})-(\d{2})$/.exec(value);
+    if (!match) return;
+    const year = Number(match[1]);
+    const month = Number(match[2]) - 1;
+    jumpTo(clampDay(year, month, selected.getUTCDate()), 'month');
+  };
+
+  const pickYear = (value: string) => {
+    const year = Number(value);
+    if (!Number.isInteger(year) || year < 1900 || year > 2200) return;
+    jumpTo(clampDay(year, cursor.getUTCMonth(), selected.getUTCDate()), 'year');
+  };
 
   const startAdd = () => {
     setEditingId(null);
@@ -338,7 +461,7 @@ export default function CalendarViews() {
 
   return (
     <main className="mx-auto max-w-[620px] px-[14px] pt-[18px] pb-12">
-      <header className="mb-4 flex items-start gap-2">
+      <header className="mb-3 flex items-start gap-2">
         <h1 className="m-0 min-w-0 flex-1 font-display text-[18px] font-medium capitalize leading-tight">
           {label.main}
           <small className="mt-px block font-sans text-[12.5px] font-normal normal-case" style={{ color: 'var(--dim)' }}>
@@ -350,41 +473,60 @@ export default function CalendarViews() {
                 style={{ background: 'var(--accent)', borderColor: 'var(--accent)', color: 'var(--on-accent)' }}>
           Dodaj
         </button>
-        <button onClick={() => { if (!today) return; setCursor(today); setSelected(today); setView('day'); }}
-                className="h-9 rounded-[10px] border px-3 text-[13px]"
-                style={{ background: 'var(--surface)', borderColor: 'var(--line)', color: 'var(--muted)' }}>
-          Dzis
-        </button>
-        <div className="flex flex-none gap-1.5">
-          {(['<', '>'] as const).map((ch, i) => (
-            <button key={ch} onClick={() => step(i === 0 ? -1 : 1)} aria-label={i === 0 ? 'Poprzedni' : 'Nastepny'}
-                    className="grid h-9 w-9 place-items-center rounded-[10px] border"
-                    style={{ background: 'var(--surface)', borderColor: 'var(--line)', color: 'var(--muted)' }}>
-              {ch}
-            </button>
-          ))}
-        </div>
       </header>
+
+      <section className="mb-3.5 grid gap-2">
+        <div className="grid grid-cols-[36px_1fr_36px] gap-1.5">
+          <button onClick={() => step(-1)} aria-label="Poprzedni zakres"
+                  className="grid h-9 w-9 place-items-center rounded-[10px] border text-lg"
+                  style={{ background: 'var(--surface)', borderColor: 'var(--line)', color: 'var(--muted)' }}>
+            &lt;
+          </button>
+
+          <RangePicker
+            view={view}
+            cursor={cursor}
+            onDate={pickDate}
+            onWeek={pickWeek}
+            onMonth={pickMonth}
+            onYear={pickYear}
+          />
+
+          <button onClick={() => step(1)} aria-label="Nastepny zakres"
+                  className="grid h-9 w-9 place-items-center rounded-[10px] border text-lg"
+                  style={{ background: 'var(--surface)', borderColor: 'var(--line)', color: 'var(--muted)' }}>
+            &gt;
+          </button>
+        </div>
+
+        <div className="grid grid-cols-[1fr_auto] gap-1.5">
+          <nav className="flex gap-1.5">
+            {([['day', 'Dzien'], ['week', 'Tydzien'], ['month', 'Miesiac'], ['year', 'Rok']] as const).map(([v, t]) => (
+              <button key={v} onClick={() => changeView(v)} aria-pressed={view === v}
+                      className="flex-1 rounded-[10px] border py-2.5 text-sm"
+                      style={{
+                        background: view === v ? 'var(--raised)' : 'var(--surface)',
+                        borderColor: view === v ? 'var(--accent-line)' : 'var(--line)',
+                        color: view === v ? 'var(--text)' : 'var(--dim)',
+                        fontWeight: view === v ? 600 : 400,
+                      }}>
+                {t}
+              </button>
+            ))}
+          </nav>
+
+          <button onClick={goToday}
+                  className="rounded-[10px] border px-3 text-[13px]"
+                  style={{ background: 'var(--surface)', borderColor: 'var(--line)', color: 'var(--muted)' }}>
+            Dzis
+          </button>
+        </div>
+      </section>
 
       <ReminderPanel notices={notices} onClear={() => setNotices([])} />
 
       <ThemePicker theme={theme} onChange={changeTheme} />
       <HolidayCountryPicker country={holidayCountry} onChange={changeHolidayCountry} />
-
-      <nav className="mb-3.5 flex gap-1.5">
-        {([['day', 'Dzien'], ['week', 'Tydzien'], ['month', 'Miesiac'], ['year', 'Rok']] as const).map(([v, t]) => (
-          <button key={v} onClick={() => setView(v)} aria-pressed={view === v}
-                  className="flex-1 rounded-[10px] border py-2.5 text-sm"
-                  style={{
-                    background: view === v ? 'var(--raised)' : 'var(--surface)',
-                    borderColor: view === v ? 'var(--accent-line)' : 'var(--line)',
-                    color: view === v ? 'var(--text)' : 'var(--dim)',
-                    fontWeight: view === v ? 600 : 400,
-                  }}>
-            {t}
-          </button>
-        ))}
-      </nav>
 
       {view === 'month' && (
         <MonthView events={events} cursor={cursor} today={today} selected={selected}
