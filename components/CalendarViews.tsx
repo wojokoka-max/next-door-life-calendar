@@ -651,7 +651,12 @@ function AgendaList({ events, onEdit }: { events: Occurrence[]; onEdit: (id: str
         <li key={`${e.id}:${e.date}`}>
           <button type="button" onClick={() => onEdit(e.id)}
                   className="grid w-full items-center gap-[11px] overflow-hidden rounded-[10px] py-[11px] pr-[13px] text-left"
-                  style={{ gridTemplateColumns: '52px 3px 1fr', background: 'var(--surface)', color: 'var(--text)' }}>
+                  style={{
+                    gridTemplateColumns: '52px 3px 1fr',
+                    background: e.time ? 'var(--surface)' : 'var(--all-day-bg)',
+                    boxShadow: e.time ? undefined : 'inset 0 0 0 1px var(--all-day-line)',
+                    color: 'var(--text)',
+                  }}>
           <span className="pl-[11px] text-right font-mono text-[13px]" style={{ color: 'var(--dim)' }}>
             {e.time ?? '-'}
           </span>
@@ -772,7 +777,12 @@ function WeekView({ events, cursor, today, scroller, onEdit }: {
               {evs.filter(e => !e.time && +e.day === +d).map(e => (
                 <button type="button" key={`${e.id}:${e.date}`} onClick={() => onEdit(e.id)}
                         className="truncate rounded-[3px] border-l-2 px-[3px] py-[2px] text-left text-[9.5px]"
-                        style={{ background: 'var(--raised)', borderLeftColor: `var(--w${e.weight + 1})`, color: 'var(--text)' }}>{e.title}</button>
+                        style={{
+                          background: 'var(--all-day-bg)',
+                          borderLeftColor: `var(--w${e.weight + 1})`,
+                          boxShadow: 'inset 0 0 0 1px var(--all-day-line)',
+                          color: 'var(--text)',
+                        }}>{e.title}</button>
               ))}
             </div>
           );
@@ -818,7 +828,12 @@ function DayView({ events, cursor, today, scroller, onEdit }: {
           {allDay.length ? allDay.map(e => (
             <button type="button" key={`${e.id}:${e.date}`} onClick={() => onEdit(e.id)}
                     className="rounded-[5px] border-l-[3px] px-[9px] py-1.5 text-left text-[12.5px]"
-                    style={{ background: 'var(--surface)', borderLeftColor: `var(--w${e.weight + 1})`, color: 'var(--text)' }}>{e.title}</button>
+                    style={{
+                      background: 'var(--all-day-bg)',
+                      borderLeftColor: `var(--w${e.weight + 1})`,
+                      boxShadow: 'inset 0 0 0 1px var(--all-day-line)',
+                      color: 'var(--text)',
+                    }}>{e.title}</button>
           )) : <div className="pl-0.5 pt-1 text-xs" style={{ color: 'var(--dim)' }}>-</div>}
         </div>
       </div>
